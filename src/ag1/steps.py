@@ -45,6 +45,7 @@ class Check:
     observed: str
     passed: bool
     detail: str = ""
+    applicable: bool = True
 
 
 @dataclass
@@ -57,7 +58,11 @@ class StepResult:
 
     @property
     def passed(self) -> bool:
-        return all(c.passed for c in self.checks)
+        return all(c.passed for c in self.checks if c.applicable)
+
+    @property
+    def not_applicable(self) -> int:
+        return sum(not c.applicable for c in self.checks)
 
     def decision(self, description: str, decision, want_allowed: bool) -> None:
         want = "allowed" if want_allowed else "denied"
@@ -66,6 +71,13 @@ class StepResult:
 
     def fact(self, description: str, expected: str, observed: str, passed: bool, detail: str = "") -> None:
         self.checks.append(Check(description, expected, observed, passed, detail))
+
+    def inapplicable(self, description: str, expected: str, reason: str) -> None:
+        """Record a check the implementation's architecture cannot be tested by.
+
+        It is reported as not applicable, never as met.
+        """
+        self.checks.append(Check(description, expected, "not applicable", False, reason, applicable=False))
 
 
 def _delegation(fn) -> tuple[str, str]:
@@ -170,7 +182,7 @@ def ag1_03(adapter=None) -> StepResult:
 
 
 def ag1_04(adapter=None) -> StepResult:
-    r = StepResult("AG-1.4", "Delegation across a trust boundary",
+    r = StepResult("AG-1.4", "Delegation across a simulated trust boundary",
                    "A receiving enforcement point accepts a narrower child across a trust boundary only after "
                    "validating the originating principal, intended audience, delegation chain, and trusted issuer. "
                    "Every widening attempt is rejected, and a requested lifetime longer than the parent's is "
@@ -225,9 +237,6 @@ def ag1_04(adapter=None) -> StepResult:
         cross_patch, pk, remote_runner, cross_caps, ttl=300, terminal=True,
     )
     remote = w.agent(remote_runner, [cross_root, cross_patch, remote_grant])
-    r.fact("delegation crosses workload trust domains", "dev.example -> test.example",
-           f"{w.patch_agent.principal.trust_domain} -> {remote_runner.trust_domain}",
-           w.patch_agent.principal.trust_domain != remote_runner.trust_domain)
     receiving = EnforcementPoint(
         adapter=a,
         trusted_root=w.issuer,
@@ -272,8 +281,11 @@ def ag1_04(adapter=None) -> StepResult:
                receiving.handle(alien.request("test.run", remote_args, intent="attack")), False)
     r.comments = ("Widening tools and constraints, and delegating past a terminal grant, must be rejected. A longer "
                   "requested lifetime may be rejected or clamped, as long as the child never outlives its parent. "
-                  "The cross-domain checks exercise the receiving enforcement point's own audience, origin, and "
-                  "root-of-trust configuration.")
+                  "The trust boundary is simulated: a second enforcement point with its own configuration in the "
+                  "same process, and trust domains are scenario labels, not grant contents. The adapter supplies "
+                  "chain verification against the trusted issuer and the audience constraint inside the grant; the "
+                  "AG-1 reference enforcement point supplies the comparison with its own audience and the "
+                  "originating-principal allowlist.")
     return r
 
 
@@ -498,9 +510,8 @@ def ag1_09(adapter=None) -> StepResult:
                accepted_altered == 0,
                f"{rejected} rejected; {envelope_only} envelope-only changes left the signed content unchanged")
     else:
-        r.fact("single-bit mutation of a structured signed grant", "architectural alternative documented",
-               f"not applicable to {a.capabilities.artifact_mode} artifacts", True,
-               "The verifier still tests the presented artifact through its declared verification mode.")
+        r.inapplicable("every single-bit change to the grant", "no change to signed content accepted",
+                       f"declared {a.capabilities.artifact_mode} artifacts expose no signed content to mutate")
 
     other_root = a.new_principal("untrusted-issuer")
     alien = a.issue(other_root, w.orchestrator.principal,

@@ -21,6 +21,8 @@ from .steps import StepResult
 RESPONSIBILITIES = [
     ("Grant issuance, attenuation, proof, and authorization verification", "Adapter / implementation under test"),
     ("Argument normalization", "AG-1 reference enforcement point"),
+    ("Receiver audience comparison and originating-principal allowlist (AG-1.4)", "AG-1 reference enforcement point"),
+    ("Trust-domain labels (AG-1.4)", "AG-1 scenario; not carried in grants"),
     ("Enforcement immediately before execution", "AG-1 reference enforcement point"),
     ("Evidence signing and hash linking", "AG-1 reference enforcement point"),
     ("SCM, CI/CD, and deployment behavior", "AG-1 mock service"),
@@ -30,7 +32,10 @@ RESPONSIBILITIES = [
 def _observed(step: StepResult) -> str:
     lines = []
     for c in step.checks:
-        mark = "as expected" if c.passed else f"EXPECTED {c.expected}"
+        if not c.applicable:
+            mark = "NOT APPLICABLE, not counted as met"
+        else:
+            mark = "as expected" if c.passed else f"EXPECTED {c.expected}"
         detail = f" ({c.detail})" if c.detail else ""
         lines.append(f"{c.description}: {c.observed}{detail}; {mark}.")
     return "<br>".join(lines)
@@ -68,6 +73,8 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter) -> str:
     ]
     for s in steps:
         result = "Met" if s.passed else "Not met"
+        if s.not_applicable:
+            result += f" ({s.not_applicable} not applicable)"
         out.append(f"| {s.step_id} {s.title} | {s.expected_outcome} | {_observed(s)} | {result} | {s.comments} |")
     out += ["", "## Utility measures", "", "| Measure | Value |", "| :- | :- |"]
     labels = {
@@ -123,18 +130,36 @@ def _write_evidence(directory: Path, world) -> None:
     (directory / "evidence.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
 
-def verify_bundle(directory: Path, adapter) -> dict:
-    """Verify exported evidence signatures, links, terminal hash, and authorization chains."""
-    bundle = json.loads((directory / "evidence.json").read_text(encoding="utf-8"))
-    public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(bundle["evidence_public_key"]))
-    verifier = adapter.verifier(bundle["trusted_root"])
+def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
+    """Verify an exported evidence bundle against anchors obtained outside it.
+
+    The trusted root and the evidence signing key must come from somewhere the
+    bundle's author cannot rewrite afterwards (a CI log, a published key). Keys
+    named inside the bundle are only compared with them, never trusted, because
+    anyone able to edit the bundle could re-sign it with keys of their own.
+    """
+    try:
+        bundle = json.loads((directory / "evidence.json").read_text(encoding="utf-8"))
+        public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(evidence_key))
+        records = bundle["records"]
+        verifier = adapter.verifier(trusted_root)
+    except Exception as exc:  # unreadable bundle or malformed anchor: never valid
+        return {"valid": False, "error": f"{type(exc).__name__}: {exc}"}
+    anchors = {
+        "trusted_root_matches": bundle.get("trusted_root") == trusted_root,
+        "evidence_key_matches": bundle.get("evidence_public_key") == evidence_key,
+        "implementation_matches": bundle.get("implementation", {}).get("name") == adapter.name,
+    }
     expected_prev = GENESIS
     signatures = links = chains = 0
     terminal_hash = GENESIS
-    for item in bundle["records"]:
-        body = item["record"]
-        payload = record_payload(body)
-        signature = bytes.fromhex(item["signature"])
+    for item in records:
+        try:
+            body = item["record"]
+            payload = record_payload(body)
+            signature = bytes.fromhex(item["signature"])
+        except (KeyError, ValueError, TypeError):
+            continue
         try:
             public_key.verify(signature, payload)
             signatures += 1
@@ -150,15 +175,19 @@ def verify_bundle(directory: Path, adapter) -> dict:
                 chains += 1
             except Exception:
                 pass
-    count = len(bundle["records"])
+    count = len(records)
+    chained = sum(1 for item in records
+                  if isinstance(item, dict) and isinstance(item.get("record"), dict)
+                  and item["record"].get("authorization_chain"))
     return {
+        **anchors,
         "records": count,
         "signatures_valid": signatures,
         "links_valid": links,
         "chains_valid": chains,
-        "terminal_hash_valid": terminal_hash == bundle["terminal_hash"],
-        "valid": signatures == count and links == count and chains == count
-                 and terminal_hash == bundle["terminal_hash"],
+        "terminal_hash_valid": terminal_hash == bundle.get("terminal_hash"),
+        "valid": all(anchors.values()) and signatures == count and links == count
+                 and chains == chained and terminal_hash == bundle.get("terminal_hash"),
     }
 
 
@@ -177,6 +206,7 @@ def write(steps: list[StepResult], utility: dict, directory: Path, adapter, evid
                 "title": s.title,
                 "expected_outcome": s.expected_outcome,
                 "met": s.passed,
+                "checks_not_applicable": s.not_applicable,
                 "checks": [c.__dict__ for c in s.checks],
                 "comments": s.comments,
             }

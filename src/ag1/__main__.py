@@ -21,11 +21,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("results"))
     parser.add_argument("--verify", type=Path, metavar="RESULTS_DIR",
                         help="verify an exported evidence bundle and exit")
+    parser.add_argument("--trusted-root", metavar="HEX",
+                        help="with --verify: the trusted root public key, obtained outside the bundle")
+    parser.add_argument("--evidence-key", metavar="HEX",
+                        help="with --verify: the evidence signing public key, obtained outside the bundle")
     args = parser.parse_args(argv)
 
     adapter = load(args.adapter)
     if args.verify is not None:
-        verification = report.verify_bundle(args.verify, adapter)
+        if not (args.trusted_root and args.evidence_key):
+            parser.error("--verify needs --trusted-root and --evidence-key from a source other than the bundle")
+        verification = report.verify_bundle(args.verify, adapter, args.trusted_root, args.evidence_key)
         print(f"evidence: {verification}")
         return 0 if verification["valid"] else 1
     results = [step(adapter) for step in STEPS]
@@ -35,12 +41,18 @@ def main(argv: list[str] | None = None) -> int:
     for r in results:
         print(f"{'MET    ' if r.passed else 'NOT MET'}  {r.step_id:8} {r.title}")
         for c in r.checks:
-            if not c.passed:
+            if not c.applicable:
+                print(f"           - {c.description}: not applicable ({c.detail})")
+            elif not c.passed:
                 print(f"           - {c.description}: expected {c.expected}, observed {c.observed} {c.detail}")
     print(f"\nutility: {utility}")
     report.write(results, utility, args.out, adapter, evidence_world=evidence_world)
     print(f"wrote {args.out / 'results.md'}")
-    print(f"verify with: {parser.prog} --adapter {args.adapter} --verify {args.out}")
+    anchors = (f"--trusted-root {evidence_world.issuer.public_id} "
+               f"--evidence-key {evidence_world.gateway.evidence_public_key_hex}")
+    print("record these anchors outside the results directory; the bundle cannot vouch for itself")
+    print(f"anchors: {anchors}")
+    print(f"verify with: {parser.prog} --adapter {args.adapter} --verify {args.out} {anchors}")
     return 0 if all(r.passed for r in results) and utility["mistaken_denials"] == 0 else 1
 
 

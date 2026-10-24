@@ -24,6 +24,9 @@ introspection without imitating a holder-signed capability chain. Checks that in
 structured offline artifact should report that architectural alternative instead of claiming that
 opaque bytes form a locally verifiable chain.
 
+A check skipped because of a declared mode is reported as *not applicable* and is never counted as
+met; the declared values are validated against the lists above.
+
 ## Interface
 
 `src/ag1/adapters/base.py` defines the protocol. Grants are described with the neutral types in
