@@ -34,6 +34,8 @@ class Verifier(Protocol):
         `signed_args` are the exact arguments the presenter signed; `constraint_args`
         are their normalized form, which is what constraints must be checked against.
         Verification must use only the trusted root this verifier was created with.
+        An identical request that was already authorized, and an approval that was
+        already used, must be refused.
         """
 
     def verify_chain(self, chain: list) -> None:
@@ -66,8 +68,9 @@ class Adapter(Protocol):
     def prove(self, chain: list, holder: Principal, tool: str, args: dict) -> Any:
         """Proof that `holder` presents this request, bound to `tool` and `args`."""
 
-    def approve(self, approver: Principal, grant: Any, holder: Principal, tool: str, args: dict) -> Any:
-        """A signed approval bound to this exact request."""
+    def approve(self, approver: Principal, grant: Any, holder: Principal, tool: str, args: dict,
+                ttl: int | None = None) -> Any:
+        """A signed approval bound to this exact request, valid for `ttl` seconds (adapter default if None)."""
 
     def verifier(self, trusted_root: Principal) -> Verifier: ...
 

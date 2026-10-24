@@ -8,6 +8,7 @@ differs from the wording of the expected outcome.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -15,7 +16,7 @@ from dataclasses import dataclass, field
 from cryptography.exceptions import InvalidSignature
 
 from .adapters.base import Adapter
-from .gateway import EnforcementPoint, Request
+from .gateway import GENESIS, EnforcementPoint, Request, record_payload
 from .scenario import (
     ARTIFACT,
     ARTIFACT_NEXT,
@@ -102,6 +103,12 @@ def ag1_02(adapter=None) -> StepResult:
         ("branch alias HEAD (resolves to main)", {"branch": "HEAD"}, False),
         ("unrelated path outside the grant", {"path": "/src/auth/session.c"}, False),
         ("extra argument not in the grant (force=true)", {"force": True}, False),
+        ("fullwidth solidus look-alike (U+FF0F)", {"path": "/src/parser/..\uff0f..\uff0f.github/workflows/release.yml"}, False),
+        ("division slash look-alike (U+2215)", {"path": "/src/parser/..\u2215..\u2215.github/workflows/release.yml"}, False),
+        ("overlong UTF-8 encoding of / (%c0%af)", {"path": "/src/parser/..%c0%af..%c0%af.github/workflows/release.yml"}, False),
+        ("backslash separators", {"path": "/src/parser/..\\..\\.github\\workflows\\release.yml"}, False),
+        ("path given as a list", {"path": ["/src/parser/lexer.c", "/.github/workflows/release.yml"]}, False),
+        ("path longer than 4096 characters", {"path": "/src/parser/" + "a/" * 2100 + "x.c"}, False),
     ]
     for desc, override, ok in cases:
         r.decision(desc, w.call(w.patch_agent, "repo.write", {**WRITE_OK, **override},
@@ -126,7 +133,9 @@ def ag1_02(adapter=None) -> StepResult:
         r.decision(desc, w.call(run, "test.run", {**base, "argv": argv}, intent="legit" if ok else "attack"), ok)
     r.comments = ("Constraints are matched against the canonical form while proof of possession covers the "
                   "exact arguments the agent signed. Command lines are parsed into structured flags before "
-                  "matching; shell operators, stray positional words and repeated flags are refused.")
+                  "matching; shell operators, stray positional words and repeated flags are refused. Ambiguous paths "
+                  "(look-alike separators, invalid encodings, backslashes, non-string values) are refused rather "
+                  "than interpreted.")
     return r
 
 
@@ -143,7 +152,14 @@ def ag1_03(adapter=None) -> StepResult:
     replay = Request("other-workload", captured.chain, "repo.write",
                      {**WRITE_OK, "path": "/src/parser/backdoor.c"}, captured.proof, intent="attack")
     r.decision("captured proof replayed with different arguments", w.gateway.handle(replay), False)
-    r.decision("legitimate holder presents its own proof", w.call(w.patch_agent, "repo.write", WRITE_OK), True)
+    legit = w.patch_agent.request("repo.write", WRITE_OK)
+    r.decision("legitimate holder presents its own proof", w.gateway.handle(legit), True)
+    replay = Request("other-workload", legit.chain, legit.tool, dict(legit.args), legit.proof, intent="attack")
+    r.decision("exact replay of the executed request (same chain, proof and arguments)",
+               w.gateway.handle(replay), False)
+    r.comments = ("Proof of possession binds the request to the holder's key, the tool and the arguments. An "
+                  "identical replay inside the proof's validity window also needs the enforcement point to "
+                  "remember proofs it has accepted; the Tenuo adapter enables Tenuo's NonceStore for this.")
     return r
 
 
@@ -234,10 +250,20 @@ def ag1_06(adapter=None) -> StepResult:
     r.decision(f"approval for {ARTIFACT} reused to deploy {ARTIFACT_NEXT} (also within the grant)",
                w.call(ra, "deploy.staging", {"artifact": ARTIFACT_NEXT}, approvals=[approval(w.release_approver)],
                       intent="attack"), False)
-    r.decision("valid action-bound approval",
-               w.call(ra, "deploy.staging", args, approvals=[approval(w.release_approver)]), True)
+    short = a.approve(w.release_approver, grant, ra.principal, "deploy.staging", args, ttl=1)
+    time.sleep(5)  # > validity + clock tolerance + 1s timestamp granularity
+    r.decision("approval used after it expired (1s validity, used after 5s)",
+               w.call(ra, "deploy.staging", args, approvals=[short], intent="attack"), False)
+    valid = approval(w.release_approver)
+    r.decision("valid action-bound approval", w.call(ra, "deploy.staging", args, approvals=[valid]), True)
+    r.decision("same approval reused for a second, identical deploy",
+               w.call(ra, "deploy.staging", args, approvals=[valid], intent="attack"), False)
     r.decision("development task attempts the deploy (no deploy authority at all)",
                w.call(w.patch_agent, "deploy.staging", args, intent="attack"), False)
+    r.fact("deployments executed", "1", str(len(w.scm.deployments)), len(w.scm.deployments) == 1)
+    r.comments = ("Approval binding and expiry are checked by the implementation (with a 2s clock tolerance in "
+                  "this harness). Single use is enforced by the enforcement point remembering approvals it has "
+                  "accepted.")
     return r
 
 
@@ -278,18 +304,22 @@ def ag1_07(adapter=None) -> StepResult:
 
 
 def verify_evidence(gateway: EnforcementPoint, adapter: Adapter, issuer) -> list[dict]:
-    """Auditor side: check each record's signature and re-verify its chain offline."""
+    """Auditor side: check each record's signature and link, and re-verify its chain offline."""
     pub = gateway.evidence_public_key
     verifier = adapter.verifier(issuer)
     out = []
+    expected_prev = GENESIS
     for item in gateway.evidence:
         body = item["record"]
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+        payload = record_payload(body)
+        signature = bytes.fromhex(item["signature"])
         try:
-            pub.verify(bytes.fromhex(item["signature"]), payload)
+            pub.verify(signature, payload)
             sig_ok = True
         except InvalidSignature:
             sig_ok = False
+        linked = body.get("prev") == expected_prev
+        expected_prev = hashlib.sha256(payload + signature).hexdigest()
         chain_ok = None
         if body["authorization_chain"]:
             try:
@@ -297,7 +327,8 @@ def verify_evidence(gateway: EnforcementPoint, adapter: Adapter, issuer) -> list
                 chain_ok = True
             except Exception as exc:
                 chain_ok = type(exc).__name__
-        out.append({"seq": body["seq"], "signature_valid": sig_ok, "chain": chain_ok, "record": body})
+        out.append({"seq": body["seq"], "signature_valid": sig_ok, "linked": linked, "chain": chain_ok,
+                    "record": body})
     return out
 
 
@@ -340,14 +371,24 @@ def ag1_08(adapter=None) -> StepResult:
            "release-manager, identity and expiry recorded",
            f"{who}, {approvals[0].get('approver_identity') if approvals else '-'}, "
            f"expires {approvals[0].get('expires_at') if approvals else '-'}", ok)
-    tampered = json.loads(json.dumps(w.gateway.evidence[1]))
-    tampered["record"]["decision"] = "allowed"
-    w.gateway.evidence.append(tampered)
-    caught = not verify_evidence(w.gateway, a, w.issuer)[-1]["signature_valid"]
+    r.fact("records form an unbroken hash chain", "all linked",
+           f"{sum(x['linked'] for x in audited)}/{len(audited)} linked", all(x["linked"] for x in audited))
+    original = list(w.gateway.evidence)
+    edited = json.loads(json.dumps(original[1]))
+    edited["record"]["decision"] = "allowed"
+    w.gateway.evidence[:] = original[:1] + [edited] + original[2:]
+    caught = not verify_evidence(w.gateway, a, w.issuer)[1]["signature_valid"]
     r.fact("a record edited after the fact (denied -> allowed) is detected", "detected",
            "detected" if caught else "not detected", caught)
+    w.gateway.evidence[:] = original[:1] + original[2:]
+    gap = not all(x["linked"] for x in verify_evidence(w.gateway, a, w.issuer))
+    r.fact("a record deleted from the middle of the log is detected", "detected",
+           "detected" if gap else "not detected", gap)
+    w.gateway.evidence[:] = original
     r.comments = ("Records carry the presented chain, so an auditor needs only the root key and the enforcement "
-                  "point's evidence key, not the logging system's word.")
+                  "point's evidence key, not the logging system's word. Each record includes the hash of the one "
+                  "before it; deleting the newest records is only detectable if the latest hash is anchored "
+                  "elsewhere, for example in a transparency log.")
     return r
 
 
@@ -389,11 +430,26 @@ def ag1_09(adapter=None) -> StepResult:
     spliced = w.agent(w.patch_agent.principal, [w.task_grant, alien_child])
     r.decision("valid link from another chain spliced under the real root",
                w.gateway.handle(spliced.request("repo.write", {**WRITE_OK, "branch": "main"}, intent="attack")), False)
+    for desc, chain in [("auditor's offline check of a spliced chain", [w.task_grant, alien_child]),
+                        ("auditor's offline check of a chain from an untrusted root", [alien, alien_child])]:
+        try:
+            verifier.verify_chain(chain)
+            outcome = "accepted"
+        except Exception as exc:
+            outcome = f"rejected ({type(exc).__name__})"
+        r.fact(desc, "rejected", outcome, outcome.startswith("rejected"))
     self_minted = w.agent(other_root, [a.issue(other_root, other_root,
                                                {"deploy.production": {"artifact": Exact(ARTIFACT)}}, ttl=600)])
     r.decision("self-minted root from an untrusted key",
                w.gateway.handle(self_minted.request("deploy.production", {"artifact": ARTIFACT}, intent="attack")),
                False)
+    pk = w.patch_agent.principal
+    for desc, chain in [("chain presented in reverse order", [patch, w.task_grant]),
+                        ("chain with the root link removed", [patch]),
+                        ("chain with the root link duplicated", [w.task_grant, w.task_grant, patch])]:
+        req = Request("patch-agent", chain, "repo.write", WRITE_OK, a.prove(chain, pk, "repo.write", WRITE_OK),
+                      intent="attack")
+        r.decision(desc, w.gateway.handle(req), False)
     outcome, err = _delegation(lambda: a.delegate(patch, a.new_principal("not-the-holder"), a.new_principal("x"),
                                                   {"repo.read": {"repo": Exact(REPO)}}, ttl=60))
     r.fact("link signed by a key that does not hold the parent", "rejected", outcome, outcome == "rejected", err)

@@ -10,6 +10,7 @@ import cbor2
 import tenuo
 from tenuo import (
     Authorizer,
+    NonceStore,
     SignedRevocationList,
     SigningKey,
     Warrant,
@@ -44,18 +45,41 @@ def _constraint(c: spec.Constraint):
     raise TypeError(f"unsupported constraint {c!r}")
 
 
+def _approval_nonce(approval) -> bytes:
+    return bytes(cbor2.loads(approval.payload).get("nonce", b"")) or bytes(approval.signature)
+
+
 def _apply(builder, caps: spec.Capabilities):
     for tool, args in caps.items():
         builder = builder.capability(tool, **{k: _constraint(v) for k, v in args.items()})
     return builder
 
 
+CLOCK_TOLERANCE_SECS = 2  # production deployments typically allow more; see README
+
+
 class TenuoVerifier:
+    """Tenuo's Authorizer plus the two deployment choices it leaves to the caller.
+
+    `Authorizer` verifies the chain, proof of possession, constraints,
+    expiry, revocation and approval binding. Replay of an identical request
+    within the proof window, and reuse of an approval, are only stopped if the
+    enforcement point remembers what it has seen, so this verifier does.
+    """
+
     def __init__(self, root: TenuoPrincipal) -> None:
         self._authorizer = Authorizer(trusted_roots=[root.key.public_key])
+        self._authorizer.set_clock_tolerance(CLOCK_TOLERANCE_SECS)
+        self._nonces = NonceStore(ttl_seconds=self._authorizer.pop_validity_secs() + CLOCK_TOLERANCE_SECS)
+        self._used_approvals: set[bytes] = set()
         self._revocation_version = 0
 
     def authorize(self, chain, tool, signed_args, constraint_args, proof, approvals):
+        if proof is not None and self._nonces.is_replay(bytes(proof)):
+            raise spec.Denied("Replay: this proof of possession has already been used")
+        approval_nonces = [_approval_nonce(a) for a in approvals or []]
+        if any(n in self._used_approvals for n in approval_nonces):
+            raise spec.Denied("ApprovalReuse: this approval has already been used")
         try:
             self._authorizer.check_chain_with_pop_args(
                 chain=chain, tool=tool, pop_args=signed_args, constraint_args=constraint_args,
@@ -63,6 +87,10 @@ class TenuoVerifier:
             )
         except Exception as exc:
             raise spec.Denied(f"{type(exc).__name__}: {exc}") from exc
+        # Record only after success, so a failed attempt cannot burn a legitimate request.
+        if proof is not None:
+            self._nonces.check_and_record(bytes(proof))
+        self._used_approvals.update(approval_nonces)
 
     def verify_chain(self, chain):
         self._authorizer.verify_chain(chain)
@@ -105,10 +133,10 @@ class TenuoAdapter:
     def prove(self, chain, holder, tool, args):
         return bytes(chain[-1].sign(holder.key, tool, args, int(time.time())))
 
-    def approve(self, approver, grant, holder, tool, args):
+    def approve(self, approver, grant, holder, tool, args, ttl: int | None = None):
         request_hash = compute_request_hash(grant.id, tool, args, holder.key.public_key)
         request = ApprovalRequest(tool=tool, arguments=args, warrant_id=grant.id, request_hash=request_hash)
-        return sign_approval(request, approver.key, external_id=f"{approver.name}@example.org")
+        return sign_approval(request, approver.key, external_id=f"{approver.name}@example.org", ttl_seconds=ttl)
 
     def verifier(self, trusted_root):
         return TenuoVerifier(trusted_root)

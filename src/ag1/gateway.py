@@ -12,6 +12,7 @@ Every tool call passes through `EnforcementPoint.handle`, which:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import posixpath
 import re
@@ -58,6 +59,13 @@ class Decision:
         return "allowed" if self.allowed else "denied"
 
 
+MAX_PATH = 4096
+GENESIS = "0" * 64
+
+
+def record_payload(body: dict) -> bytes:
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+
 _FLAG = re.compile(r"^--([a-z][a-z0-9-]*)(?:=(.*))?$")
 _SHELL_OPERATORS = set(";|&`$<>()")
 
@@ -99,6 +107,7 @@ class EnforcementPoint:
     enforce: bool = True
     evidence: list[dict] = field(default_factory=list)
     _signer: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
+    _head: str = GENESIS
 
     def __post_init__(self) -> None:
         self.verifier = self.adapter.verifier(self.trusted_root)
@@ -117,26 +126,48 @@ class EnforcementPoint:
                 if key in out and out[key] != value:
                     raise NormalizationError(f"--{key} conflicts with an explicit argument")
                 out[key] = value
+        for key in ("repo", "branch", "head", "base", "suite", "artifact"):
+            if key in out and not isinstance(out[key], str):
+                raise NormalizationError(f"{key} must be a string, not {type(out[key]).__name__}")
         if "repo" in out:
-            out["repo"] = self.scm.canonical_repo(str(out["repo"]))
+            out["repo"] = self.scm.canonical_repo(out["repo"])
         repo = out.get("repo", "")
         for ref_key in ("branch", "head", "base"):
             if ref_key in out:
-                out[ref_key] = self.scm.resolve_ref(repo, str(out[ref_key]))
+                out[ref_key] = self.scm.resolve_ref(repo, out[ref_key])
         if "path" in out:
-            out["path"] = self._canonical_path(repo, str(out["path"]))
+            out["path"] = self._canonical_path(repo, out["path"])
         return out
 
-    def _canonical_path(self, repo: str, path: str) -> str:
+    def _canonical_path(self, repo: str, path) -> str:
+        # Refuse anything ambiguous rather than guess how a downstream tool will read it.
+        if not isinstance(path, str):
+            raise NormalizationError(f"path must be a string, not {type(path).__name__}")
+        if len(path) > MAX_PATH:
+            raise NormalizationError("path too long")
         decoded = path
         for _ in range(5):  # decode repeatedly to defeat double encoding
-            nxt = unquote(decoded)
+            try:
+                nxt = unquote(decoded, errors="strict")
+            except UnicodeDecodeError as exc:
+                raise NormalizationError("invalid percent-encoding in path") from exc
             if nxt == decoded:
                 break
             decoded = nxt
+        else:
+            raise NormalizationError("path is encoded too many times")
         decoded = unicodedata.normalize("NFC", decoded)
-        if any(ord(ch) < 0x20 for ch in decoded):
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in decoded):
             raise NormalizationError("control character in path")
+        if "\\" in decoded:
+            raise NormalizationError("backslash in path")
+        for ch in decoded:
+            # Characters that some platforms or normalizations turn into a separator or a dot,
+            # such as fullwidth solidus (U+FF0F) or division slash (U+2215).
+            if ch not in "/." and not ch.isascii() and unicodedata.normalize("NFKC", ch) in ("/", "\\", "."):
+                raise NormalizationError(f"look-alike separator U+{ord(ch):04X} in path")
+            if ch in "∕⁄⧸／﹨＼":
+                raise NormalizationError(f"look-alike separator U+{ord(ch):04X} in path")
         if not decoded.startswith("/"):
             decoded = "/" + decoded
         canonical = posixpath.normpath(decoded)
@@ -195,6 +226,10 @@ class EnforcementPoint:
             "outcome": decision.result,
             "enforced": self.enforce,
             "intent": req.intent,
+            # Hash of the previous record, so a deleted or reordered record breaks the chain.
+            "prev": self._head,
         }
-        payload = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
-        self.evidence.append({"record": body, "signature": self._signer.sign(payload).hex()})
+        payload = record_payload(body)
+        signature = self._signer.sign(payload)
+        self.evidence.append({"record": body, "signature": signature.hex()})
+        self._head = hashlib.sha256(payload + signature).hexdigest()
