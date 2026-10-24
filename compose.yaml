@@ -1,0 +1,149 @@
+# AG-1 in compose mode: every party and enforcement point a separate service.
+#
+#   scripts/compose-up.sh                       # Forgejo, tokens (as secrets), then everything else
+#   docker compose run --rm driver              # run the steps; results in ./results-compose
+#   docker compose down -v
+#
+# Networks are internal (no internet). Agents reach enforcement points, never Forgejo;
+# the test service reaches Forgejo with a read-only token and is not on the agents' network.
+
+name: ag1
+
+x-ag1: &ag1
+  build: .
+  image: ag1-harness:local
+  entrypoint: ["python", "-m", "ag1.compose"]
+  user: "65534:65534"
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment: &env
+    PYTHONDONTWRITEBYTECODE: "1"
+    AG1_PEPS: main=http://pep-main:8000,receiving=http://pep-receiving:8000,other-service=http://pep-other:8000,baseline=http://pep-baseline:8000
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    interval: 2s
+    timeout: 3s
+    retries: 60
+
+x-keyholder: &keyholder
+  <<: *ag1
+  command: [keyholder]
+  networks: [agents]
+
+x-pep: &pep
+  <<: *ag1
+  command: [pep]
+  networks: [agents, scm, tests]
+  secrets: [forgejo-admin-token]
+  depends_on:
+    forgejo: {condition: service_healthy}
+    issuer: {condition: service_healthy}
+    orchestrator: {condition: service_healthy}
+    test-service: {condition: service_healthy}
+    sink: {condition: service_healthy}
+
+x-pep-env: &pep-env
+  <<: *env
+  AG1_ISSUER_URL: http://issuer:8000
+  AG1_ORIGIN_URL: http://orchestrator:8000
+  AG1_FORGEJO_URL: http://forgejo:3000
+  AG1_FORGEJO_TOKEN_FILE: /run/secrets/forgejo-admin-token
+  AG1_TEST_SERVICE_URL: http://test-service:8000
+  AG1_SINK_URL: http://sink:8000
+
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.6@sha256:e2c34a699543ca8a00217ee9ab2bea5feedc98bd6d0ea95ec287d3b7ae1355c6
+    environment:
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__database__DB_TYPE: sqlite3
+      FORGEJO__server__ROOT_URL: http://forgejo:3000/
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+    networks: [scm, tests]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/version"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  # Key holders: each keeps its parties' private keys and signs only here.
+  issuer:
+    <<: *keyholder
+    environment: {<<: *env, AG1_IDENTITIES: task-authorization-system@control.example}
+  approver: {<<: *keyholder}
+  orchestrator:
+    <<: *keyholder
+    environment: {<<: *env, AG1_IDENTITIES: orchestrator@dev.example}
+  patch-agent: {<<: *keyholder}
+  test-runner: {<<: *keyholder}
+  release-agent: {<<: *keyholder}
+  thief: {<<: *keyholder}  # other workloads: copied chains, untrusted issuers, non-approvers
+
+  # Enforcement points, each with its own evidence key and configuration.
+  pep-main:
+    <<: *pep
+    environment: {<<: *pep-env, AG1_PEP_NAME: main}
+  pep-receiving:
+    <<: *pep
+    environment:
+      <<: *pep-env
+      AG1_PEP_NAME: receiving
+      AG1_AUDIENCE: test-gateway.test.example
+      AG1_TRUST_DOMAIN: test.example
+      AG1_ORIGIN_ALLOWLIST: "1"
+  pep-other:
+    <<: *pep
+    environment:
+      <<: *pep-env
+      AG1_PEP_NAME: other-service
+      AG1_AUDIENCE: scm-gateway.dev.example
+      AG1_TRUST_DOMAIN: dev.example
+      AG1_ORIGIN_ALLOWLIST: "1"
+  pep-baseline:  # enforcement off: the service acts on its own credential (AG-1.10 baseline)
+    <<: *pep
+    environment: {<<: *pep-env, AG1_PEP_NAME: baseline, AG1_ENFORCE: "0"}
+
+  test-service:
+    <<: *ag1
+    command: [test-service]
+    environment:
+      <<: *env
+      AG1_FORGEJO_URL: http://forgejo:3000
+      AG1_FORGEJO_READ_TOKEN_FILE: /run/secrets/forgejo-read-token
+    secrets: [forgejo-read-token]
+    networks: [tests]
+    depends_on:
+      forgejo: {condition: service_healthy}
+  sink:
+    <<: *ag1
+    command: [sink]
+    networks: [scm]
+
+  driver:
+    <<: *ag1
+    profiles: [driver]
+    entrypoint: ["ag1", "--mode", "compose"]
+    command: ["--out", "/results"]
+    user: "0:0"  # writes the bind-mounted results directory
+    environment:
+      <<: *env
+      AG1_KEYHOLDERS: issuer=http://issuer:8000,approver=http://approver:8000,orchestrator=http://orchestrator:8000,patch-agent=http://patch-agent:8000,test-runner=http://test-runner:8000,release-agent=http://release-agent:8000,thief=http://thief:8000
+      AG1_FORGEJO_URL: http://forgejo:3000
+      AG1_FORGEJO_TOKEN_FILE: /run/secrets/forgejo-admin-token
+      AG1_TEST_SERVICE_URL: http://test-service:8000
+      AG1_SINK_URL: http://sink:8000
+    secrets: [forgejo-admin-token]
+    volumes: ["./results-compose:/results"]
+    networks: [agents, scm, tests]
+    healthcheck: {disable: true}
+
+networks:
+  agents: {internal: true}
+  scm: {internal: true}
+  tests: {internal: true}
+
+secrets:
+  forgejo-admin-token: {file: ./.compose-secrets/forgejo-admin-token}
+  forgejo-read-token: {file: ./.compose-secrets/forgejo-read-token}

@@ -62,6 +62,22 @@ verifier calls the authorization server inside `authorize`. Its evidence should 
 introspection decision and trusted server, and checks that require offline chain reconstruction
 should be reported as an architectural alternative rather than silently simulated.
 
+## Remote operation (compose mode)
+
+In compose mode each party's key stays in its own key holder service, and enforcement points
+are separate services. The harness then also needs:
+
+| Method | Must |
+| :- | :- |
+| `public_principal(name, public_id, trust_domain)` | A party known only by its public identifier, usable as a holder, a delegation child, an approval holder, or an approver in a gate |
+| `proof_to_bytes` / `proof_from_bytes` | Carry a proof of possession across the network unchanged |
+| `approval_to_bytes` / `approval_from_bytes` | Carry a signed approval across the network unchanged |
+| `revocation(issuer, grants, version)` | A revocation list signed by `issuer`, cumulative, with an increasing version |
+| `verifier(...).apply_revocation(data)` | Install a list produced by `revocation`, refusing one not signed by the trusted root |
+
+An adapter without them still runs in-process. `tests/test_compose_loopback.py` runs every step
+across separate HTTP services on localhost, so an adapter can be checked without Docker.
+
 ## Running
 
 Register the adapter in `src/ag1/adapters/__init__.py`, or pass its path directly:
@@ -71,4 +87,4 @@ python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 AG1_ADAPTER=mypackage.my_adapter:MyAdapter pytest -q
 ```
 
-`src/ag1/adapters/tenuo_adapter.py` is a complete example in about 150 lines.
+`src/ag1/adapters/tenuo_adapter.py` is a complete example in about 250 lines.

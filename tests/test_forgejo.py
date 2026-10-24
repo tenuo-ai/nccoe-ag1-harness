@@ -56,9 +56,9 @@ def test_symlink_is_resolved_from_the_forge():
 
 def test_unenforced_baseline_really_rewrites_main():
     w = build_world()
-    w.gateway.enforce = False
     w.call(w.patch_agent, "repo.write",
-           {**WRITE_OK, "branch": "main", "path": "/src/parser/ci/release.yml", "content": "skip-signing: true"})
+           {**WRITE_OK, "branch": "main", "path": "/src/parser/ci/release.yml", "content": "skip-signing: true"},
+           gateway=w.baseline)
     assert w.scm.file(REPO, "main", WORKFLOW) == "skip-signing: true"
 
 

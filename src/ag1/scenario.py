@@ -12,12 +12,15 @@ runs against any adapter.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+import time
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .adapters import load
 from .adapters.base import Adapter, Principal
-from .gateway import EnforcementPoint, Request
+from .gateway import Decision, EnforcementPoint, Request
 from .scm import MockSCM, Service
 from .spec import AnyValue, ApprovalGate, Exact, OneOf, Under
 
@@ -72,24 +75,62 @@ class Agent:
         return Request(self.name, self.chain, tool, args, proof, approvals, intent)
 
 
+class Gateway(Protocol):
+    """An enforcement point as the steps see it: in this process, or a separate service."""
+
+    name: str
+
+    def handle(self, req: Request) -> Decision: ...
+
+    @property
+    def evidence(self) -> list[dict]: ...
+
+    @property
+    def evidence_public_key(self) -> Ed25519PublicKey: ...
+
+    @property
+    def evidence_public_key_hex(self) -> str: ...
+
+
 @dataclass
 class World:
     adapter: Adapter
     issuer: Principal
     release_approver: Principal
     scm: Service
-    gateway: EnforcementPoint
+    gateway: Gateway  # in front of the SCM, CI/CD and deployment services
+    receiving: Gateway  # test service in the test domain: audience and origin allowlist (AG-1.4)
+    other_service: Gateway  # another service in the development domain, with its own audience (AG-1.4)
+    baseline: Gateway  # unenforced: the service acts on its own credential (AG-1.10)
     task_grant: Any
     orchestrator: Agent
     patch_agent: Agent
     test_runner: Agent
     release_agent: Agent
+    revoke_at: Callable[[list], dict]
+    deployment: str = "in-process"
+    # Evidence records each gateway held when this world was built; a separately
+    # deployed enforcement point keeps one log for the whole run.
+    evidence_start: dict = field(default_factory=dict)
 
-    def call(self, agent: Agent, tool: str, args: dict, **kw):
-        return self.gateway.handle(agent.request(tool, args, **kw))
+    @property
+    def gateways(self) -> list[Gateway]:
+        return [self.gateway, self.receiving, self.other_service, self.baseline]
+
+    def call(self, agent: Agent, tool: str, args: dict, gateway: Gateway | None = None, **kw):
+        return (gateway or self.gateway).handle(agent.request(tool, args, **kw))
 
     def agent(self, principal: Principal, chain: list) -> Agent:
         return Agent(principal, chain, self.adapter)
+
+    def records(self, gateway: Gateway | None = None) -> list[dict]:
+        """Evidence records `gateway` wrote since this world was built."""
+        gateway = gateway or self.gateway
+        return gateway.evidence[self.evidence_start.get(gateway.name, 0):]
+
+    def revoke(self, grants: list) -> dict:
+        """Revoke `grants` at every enforcement point; returns propagation time and reach."""
+        return self.revoke_at(grants)
 
     def issue_task(self, holder: Principal, suites=SUITES):
         return self.adapter.issue(self.issuer, holder, task_caps(suites), ttl=7200, task=TASK_ID)
@@ -106,42 +147,86 @@ _service_factory: Callable[[], Service] = MockSCM
 
 
 def use_service(factory: Callable[[], Service]) -> None:
-    """Choose the SCM service every new world starts from (default: the in-memory mock)."""
+    """Choose the SCM service every new in-process world starts from (default: the in-memory mock)."""
     global _service_factory
     _service_factory = factory
+
+
+def local_deployment(adapter: Adapter) -> dict:
+    """Every party and enforcement point in this process, as objects."""
+    p = adapter.new_principal
+    parties = {
+        "issuer": p("task-authorization-system", CONTROL_DOMAIN),
+        "approver": p("release-manager", CONTROL_DOMAIN),
+        "orchestrator": p("orchestrator", DEVELOPMENT_DOMAIN),
+        "patch": p("patch-agent", DEVELOPMENT_DOMAIN),
+        "runner": p("test-runner", TEST_DOMAIN),
+        "release": p("release-agent", DEVELOPMENT_DOMAIN),
+    }
+    scm = _service_factory()
+    issuer = parties["issuer"]
+    origins = {parties["orchestrator"].public_id}
+    gateways = {
+        "gateway": EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm, name="main"),
+        "receiving": EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm, name="receiving",
+                                      audience=TEST_AUDIENCE, trust_domain=TEST_DOMAIN,
+                                      trusted_origin_principals=origins),
+        "other_service": EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm, name="other-service",
+                                          audience=SCM_AUDIENCE, trust_domain=DEVELOPMENT_DOMAIN,
+                                          trusted_origin_principals=origins),
+        "baseline": EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm, name="baseline",
+                                     enforce=False),
+    }
+
+    def revoke(grants: list) -> dict:
+        t0 = time.perf_counter()
+        for g in gateways.values():
+            g.verifier.install_revocation(issuer, grants)
+        return {"ms": (time.perf_counter() - t0) * 1000, "enforcement_points": len(gateways)}
+
+    return {**parties, "scm": scm, **gateways, "revoke": revoke, "deployment": "in-process"}
+
+
+_deployment: Callable[[Adapter], dict] = local_deployment
+
+
+def use_deployment(factory: Callable[[Adapter], dict] | None) -> None:
+    """Choose where parties and enforcement points live (default: this process)."""
+    global _deployment
+    _deployment = factory or local_deployment
 
 
 def build_world(adapter: Adapter | str | None = None) -> World:
     if adapter is None or isinstance(adapter, str):
         adapter = load(adapter or "tenuo")
-    p = adapter.new_principal
-    issuer = p("task-authorization-system", CONTROL_DOMAIN)
-    approver = p("release-manager", CONTROL_DOMAIN)
-    orch = p("orchestrator", DEVELOPMENT_DOMAIN)
-    patch = p("patch-agent", DEVELOPMENT_DOMAIN)
-    runner = p("test-runner", TEST_DOMAIN)
-    release = p("release-agent", DEVELOPMENT_DOMAIN)
-
-    scm = _service_factory()
-    gateway = EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm)
+    d = _deployment(adapter)
+    adapter = d.get("adapter", adapter)
+    issuer, orch, patch, runner, release = d["issuer"], d["orchestrator"], d["patch"], d["runner"], d["release"]
 
     task = adapter.issue(issuer, orch, task_caps(), ttl=7200, task=TASK_ID)
     patch_grant = adapter.delegate(task, orch, patch, task_caps(), ttl=1800)
     runner_grant = adapter.delegate(patch_grant, patch, runner, {"test.run": test_caps()}, ttl=600, terminal=True)
     release_grant = adapter.issue(
         issuer, release, {"deploy.staging": {"artifact": OneOf((ARTIFACT, ARTIFACT_NEXT))}}, ttl=900,
-        task=RELEASE_TASK_ID, gate=ApprovalGate(tools=("deploy.staging",), approvers=[approver]),
+        task=RELEASE_TASK_ID, gate=ApprovalGate(tools=("deploy.staging",), approvers=[d["approver"]]),
     )
 
+    gateways = [d["gateway"], d["receiving"], d["other_service"], d["baseline"]]
     return World(
         adapter=adapter,
         issuer=issuer,
-        release_approver=approver,
-        scm=scm,
-        gateway=gateway,
+        release_approver=d["approver"],
+        scm=d["scm"],
+        gateway=d["gateway"],
+        receiving=d["receiving"],
+        other_service=d["other_service"],
+        baseline=d["baseline"],
         task_grant=task,
         orchestrator=Agent(orch, [task], adapter),
         patch_agent=Agent(patch, [task, patch_grant], adapter),
         test_runner=Agent(runner, [task, patch_grant, runner_grant], adapter),
         release_agent=Agent(release, [release_grant], adapter),
+        revoke_at=d["revoke"],
+        deployment=d["deployment"],
+        evidence_start={g.name: len(g.evidence) for g in gateways},
     )

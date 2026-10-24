@@ -176,7 +176,8 @@ def test_evidence_truncation_is_only_detectable_with_an_anchor(world):
     world.call(world.orchestrator, "repo.read", {"repo": REPO})
     anchored_head = world.gateway._head  # what would be published to a transparency log
     del world.gateway.evidence[-1]
-    audited = steps.verify_evidence(world.gateway, world.adapter, world.issuer)
+    audited = steps.verify_evidence(world.gateway.evidence, world.gateway.evidence_public_key, world.adapter,
+                                     world.issuer)
     assert all(x["linked"] for x in audited)  # the truncated log is still self-consistent...
     last = world.gateway.evidence[-1]
     head = hashlib.sha256(record_payload(last["record"]) + bytes.fromhex(last["signature"])).hexdigest()

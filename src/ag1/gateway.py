@@ -105,6 +105,7 @@ class EnforcementPoint:
     adapter: Adapter
     trusted_root: Principal
     scm: Service
+    name: str = "main"
     audience: str | None = None
     trust_domain: str = "service-domain"
     trusted_origin_principals: set[str] | None = None

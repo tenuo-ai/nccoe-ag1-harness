@@ -91,6 +91,7 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter, service) -> str
         "mistaken_denials": "Denials of in-scope requests",
         "authorized_calls": "Authorized calls in the workflow",
         "total_ms": "Total workflow time (ms, local)",
+        "test_results": "Test suites run on the patched branch",
     }
     for k, v in utility.items():
         out.append(f"| {labels.get(k, k)} | {v} |")
@@ -142,20 +143,43 @@ def _bundle_header(adapter, trusted_root: str, service) -> dict:
     }
 
 
-def _write_evidence(directory: Path, world) -> None:
-    header = _bundle_header(world.adapter, world.issuer.public_id, world.scm)
-    bundle = {
+def bundle(gateway, adapter, trusted_root: str, service) -> dict:
+    """An enforcement point's whole log with a checkpoint it signs; written where the key is held."""
+    header = _bundle_header(adapter, trusted_root, service)
+    return {
         **header,
-        "evidence_public_key": world.gateway.evidence_public_key_hex,
-        "terminal_hash": world.gateway.evidence_head,
-        "checkpoint": world.gateway.checkpoint(header),
-        "records": world.gateway.evidence,
+        "enforcement_point": gateway.name,
+        "evidence_public_key": gateway.evidence_public_key_hex,
+        "terminal_hash": gateway.evidence_head,
+        "checkpoint": gateway.checkpoint(header),
+        "records": gateway.evidence,
     }
-    (directory / "evidence.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+
+
+def _write_evidence(directory: Path, world) -> None:
+    exported = bundle(world.gateway, world.adapter, world.issuer.public_id, world.scm)
+    (directory / "evidence.json").write_text(json.dumps(exported, indent=2), encoding="utf-8")
+
+
+def write_bundles(directory: Path, bundles: dict[str, dict]) -> None:
+    """Bundles exported by separately deployed enforcement points, one file each."""
+    (directory / "evidence").mkdir(parents=True, exist_ok=True)
+    for name, exported in bundles.items():
+        (directory / "evidence" / f"{name}.json").write_text(json.dumps(exported, indent=2), encoding="utf-8")
+
+
+def verify_bundles(directory: Path, adapter, trusted_root: str, evidence_keys: dict[str, str]) -> dict:
+    """Verify `evidence/<name>.json` for every named key; each bundle against its own key."""
+    found = sorted(p.stem for p in (directory / "evidence").glob("*.json"))
+    results = {name: verify_bundle(directory / "evidence" / f"{name}.json", adapter, trusted_root, key)
+               for name, key in evidence_keys.items()}
+    unanchored = [name for name in found if name not in evidence_keys]
+    return {"bundles": results, "unanchored": unanchored,
+            "valid": bool(results) and not unanchored and all(r["valid"] for r in results.values())}
 
 
 def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
-    """Verify an exported evidence bundle; a malformed bundle is invalid, never a crash."""
+    """Verify an exported evidence bundle (a results directory or a bundle file); never a crash."""
     try:
         return _verify_bundle(directory, adapter, trusted_root, evidence_key)
     except Exception as exc:
@@ -172,9 +196,14 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
     bundle's author cannot rewrite afterwards (a CI log, a published key). Keys
     named inside the bundle are only compared with them, never trusted, because
     anyone able to edit the bundle could re-sign it with keys of their own.
+
+    Every allowed record's chain must re-verify from the trusted root. A denied record may
+    carry a chain that does not (a forged or spliced one is why it was denied), so those
+    chains are counted but not required.
     """
     try:
-        bundle = json.loads((directory / "evidence.json").read_text(encoding="utf-8"))
+        path = directory / "evidence.json" if directory.is_dir() else directory
+        bundle = json.loads(path.read_text(encoding="utf-8"))
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(evidence_key))
         records = bundle["records"]
         if not (isinstance(bundle, dict) and isinstance(records, list)
@@ -190,7 +219,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         "implementation_matches": bundle.get("implementation", {}).get("name") == adapter.name,
     }
     expected_prev = GENESIS
-    signatures = links = chains = 0
+    signatures = links = chains = denied_unverifiable = 0
     terminal_hash = GENESIS
     for item in records:
         try:
@@ -211,9 +240,13 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         if body.get("authorization_chain"):
             try:
                 verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]))
-                chains += 1
+                ok = True
             except Exception:
-                pass
+                ok = False
+            if body.get("decision") == "allowed":
+                chains += ok
+            else:
+                denied_unverifiable += not ok
     count = len(records)
     checkpoint_valid = False
     try:
@@ -227,13 +260,14 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         pass
     chained = sum(1 for item in records
                   if isinstance(item, dict) and isinstance(item.get("record"), dict)
-                  and item["record"].get("authorization_chain"))
+                  and item["record"].get("authorization_chain") and item["record"].get("decision") == "allowed")
     return {
         **anchors,
         "records": count,
         "signatures_valid": signatures,
         "links_valid": links,
-        "chains_valid": chains,
+        "allowed_chains_valid": chains,
+        "denied_chains_unverifiable": denied_unverifiable,
         "terminal_hash_valid": terminal_hash == bundle.get("terminal_hash"),
         "checkpoint_valid": checkpoint_valid,
         "valid": all(anchors.values()) and signatures == count and links == count and chains == chained
