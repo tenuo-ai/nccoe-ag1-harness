@@ -30,7 +30,8 @@ jobs:
       # The anchors stay in this job's log and outside results/, so the uploaded
       # bundle is verified against keys it cannot supply itself.
       - run: python -m ag1 --out results | tee "$RUNNER_TEMP/run.log"
-      - run: python -m ag1 --verify results $(sed -n 's/^anchors: //p' "$RUNNER_TEMP/run.log")
+      - run: |
+          python -m ag1 --verify results $(sed -n 's/^anchors: //p' "$RUNNER_TEMP/run.log")
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: success()
         with:
