@@ -5,8 +5,24 @@ run the same ten steps: OAuth token exchange with an authorization server, a cap
 format such as Biscuit or macaroons, a policy engine with delegation support, or Tenuo.
 
 The harness keeps the parts that must be identical across implementations: the scenario, the mock
-SCM/CI service, argument normalization, and the signed evidence records. The adapter supplies
-everything about the authorization artifact.
+SCM/CI service, argument normalization, and the signed evidence records. Every result contains a
+responsibility table so those reference controls are not attributed to the adapter. The adapter
+supplies everything about the authorization artifact.
+
+## Architecture declaration
+
+An adapter declares three properties with `AdapterCapabilities`:
+
+| Property | Values | Meaning |
+| :- | :- | :- |
+| `delegation_mode` | `holder_signed`, `authorization_server` | Whether a holder derives the child directly or exchanges parent authority at a server |
+| `verification_mode` | `offline_chain`, `online_introspection`, `hybrid` | Where authorization artifacts are verified |
+| `artifact_mode` | `structured_signed`, `opaque` | Whether the artifact exposes portable signed content |
+
+These declarations are reported, not ranked. A conforming adapter can use OAuth Token Exchange and
+introspection without imitating a holder-signed capability chain. Checks that inherently require a
+structured offline artifact should report that architectural alternative instead of claiming that
+opaque bytes form a locally verifiable chain.
 
 ## Interface
 
@@ -24,9 +40,9 @@ Arguments not listed for a tool must be refused.
 
 | Method | Used by | Must |
 | :- | :- | :- |
-| `new_principal(name)` | all | Create a party with a public identifier (`public_id`) |
+| `new_principal(name, trust_domain)` | all | Create a party with a public identifier (`public_id`) and declared trust domain |
 | `issue(issuer, holder, caps, ttl, task, gate)` | all | Issue a root grant; with `gate`, require a signed approval from one of `gate.approvers` for the listed tools |
-| `delegate(parent, parent_holder, child, caps, ttl, terminal)` | AG-1.4, 1.9 | Derive a child signed by `parent_holder`; raise `DelegationRejected` if it adds a tool, relaxes a constraint, exceeds depth, or is signed by someone who does not hold `parent`. A longer lifetime may be rejected or clamped |
+| `delegate(parent, parent_holder, child, caps, ttl, terminal)` | AG-1.4, 1.9 | Obtain a child authorized by the parent holder, either locally or through an authorization server; raise `DelegationRejected` if it widens authority or exceeds depth. A longer lifetime may be rejected or clamped |
 | `prove(chain, holder, tool, args)` | AG-1.3 | Proof bound to the holder's key, the tool, and the exact arguments |
 | `approve(approver, grant, holder, tool, args)` | AG-1.6 | Approval bound to this exact request |
 | `verifier(trusted_root).authorize(...)` | all | Raise `Denied` unless authorized; check proof over the signed arguments and constraints over the normalized ones; use only the trusted root; refuse an identical request already authorized and an approval already used |
@@ -39,8 +55,9 @@ Arguments not listed for a tool must be refused.
 | `to_bytes` / `from_bytes` / `signed_content` | AG-1.9 | Serialization, and the bytes a signature covers |
 
 An implementation that verifies online (for example, by introspection) can still be evaluated: its
-verifier calls the authorization server inside `authorize`. AG-1.9 then reports whether it rejects
-forged chains, and the comments column should say that verification was online.
+verifier calls the authorization server inside `authorize`. Its evidence should identify the
+introspection decision and trusted server, and checks that require offline chain reconstruction
+should be reported as an architectural alternative rather than silently simulated.
 
 ## Running
 

@@ -1,0 +1,10 @@
+FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
+
+WORKDIR /ag1
+COPY requirements-lock.txt pyproject.toml README.md LICENSE ./
+COPY src ./src
+RUN pip install --no-cache-dir -r requirements-lock.txt \
+    && pip install --no-cache-dir --no-deps --no-build-isolation .
+
+ENTRYPOINT ["ag1"]
+CMD ["--out", "/results"]

@@ -1,12 +1,15 @@
 # AG-1 agent authorization harness
 
-A reproducible test of task-based authorization for AI agents in a software factory. It runs the
+A reproducible test of task-scoped authorization for AI agents in a software factory. It runs the
 AG-1 scenario that Tenuo proposed in its comments on the NIST NCCoE *Secure Software Development,
 Security, and Operations (DevSecOps) Practices* live document, for Example Implementation 3
 (agentic AI developing, building, and testing code).
 
 The harness tests requirements, not a product. Implementations plug in through an adapter
 ([ADAPTERS.md](ADAPTERS.md)); a Tenuo adapter is included.
+
+> **Independent proposal.** This repository is a Tenuo contribution and implementation aid. AG-1
+> has not been adopted or endorsed by NIST or the NCCoE.
 
 ## The problem
 
@@ -18,15 +21,18 @@ sometimes reading secrets or deploying.
 That is tolerable when a person decides each action. It is not when the agent's next action can be
 decided by text it reads. An issue, a pull request description, a dependency's README, or a tool
 response can instruct the agent, and whatever the agent is told to do is carried out with the full
-credential. Public incidents in 2026 followed exactly this pattern in GitHub Agentic Workflows,
-Cline's triage workflow, and Google's Gemini CLI triage workflow.
+credential. Public incidents in 2026 followed exactly this pattern in
+[GitHub Agentic Workflows](https://www.securityweek.com/critical-vulnerability-exposes-github-agentic-workflows-to-prompt-injection/),
+[Cline's triage workflow](https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/),
+[Google's Gemini CLI triage workflow](https://www.pillar.security/blog/my-agentic-trust-issues-from-prompt-injection-to-supply-chain-compromise-on-gemini-cli),
+and the [Claude Code GitHub Action](https://www.microsoft.com/en-us/security/blog/2026/06/05/securing-ci-cd-in-agentic-world-claude-code-github-action-case/).
 
 Identity does not fix this. Knowing reliably *which* agent is acting says nothing about *what it
 should be able to do right now*.
 
-## What task-based authorization changes
+## What task-scoped authorization changes
 
-Task-based authorization gives each task its own grant, sized for that task and nothing else, and
+Task-scoped authorization gives each task its own grant, sized for that task and nothing else, and
 checks every tool call against it.
 
 | | Standing credential (role, session, job token) | Task grant |
@@ -73,12 +79,34 @@ reading that repository, writing only to branch `fix/cve-2026-1234` under `/src/
 `unit` and `parser` test suites, and opening a pull request into `main`. Deployment is a separate
 task with its own grant that also needs a release manager's signed approval.
 
+AG-1.4 additionally places the test runner and its receiving enforcement point in a separate trust
+domain. The receiver independently checks the originating principal, its own intended audience,
+the complete delegation chain, and the trusted issuer. The same authority presented to another
+service, rooted at an untrusted issuer, or originating from an unrecognized principal is refused.
+
 The agents are scripted; no model is involved. Each step assumes prompt injection succeeds and the
 agent does what it is told, and then checks what the enforcement point allows. That is the property
 that matters: an authorization control has to hold even when the agent is fully compromised.
 
 The mock service holds a broad admin credential of its own. If a step passes, the service acted on
 the authority the agent presented, not on its own.
+
+### What the implementation supplies
+
+The report does not attribute controls supplied by the harness to the adapter under test.
+
+| Control | Provider |
+| :- | :- |
+| Grant issuance, attenuation, proof, and authorization verification | Adapter / implementation under test |
+| Argument normalization | AG-1 reference enforcement point |
+| Enforcement immediately before execution | AG-1 reference enforcement point |
+| Evidence signing and hash linking | AG-1 reference enforcement point |
+| SCM, CI/CD, and deployment behavior | AG-1 mock service |
+
+Each adapter declares its delegation, verification, and artifact modes. This allows an
+authorization-server-mediated OAuth design to describe itself differently from a holder-signed,
+offline-verifiable capability chain without treating either architecture as the definition of
+conformance. See [ADAPTERS.md](ADAPTERS.md).
 
 ## The ten steps
 
@@ -87,7 +115,7 @@ the authority the agent presented, not on its own.
 | AG-1.1 | Task scoping | The allowed action works; the same action on another repository or branch is denied before it runs |
 | AG-1.2 | Action constraints | Constraints hold on the canonical form: `../`, URL, double and overlong encoding, look-alike slashes, backslashes, symbolic links, `refs/heads/`, `HEAD`, case, extra arguments, non-string values, and command lines parsed into flags |
 | AG-1.3 | Sender constraint | A copied chain without the key, no proof, a proof replayed with other arguments, and an exact replay are all refused |
-| AG-1.4 | Delegation | A narrower child is accepted; an added tool, a relaxed path or branch, an added suite, and delegation past a terminal grant are rejected; a longer lifetime never outlives the parent |
+| AG-1.4 | Delegation across a trust boundary | A receiving enforcement point accepts a narrower child only for the trusted origin, intended audience, valid chain, and trusted issuer; widening and excess lifetime are rejected or bounded |
 | AG-1.5 | Prompt injection | An issue that asks for a workflow edit, a push to `main` and a production deploy gets none of them, and the real task still proceeds |
 | AG-1.6 | Human approval | No approval, the wrong approver, an approval for a different artifact, an expired approval and a reused approval are refused; one valid approval deploys once |
 | AG-1.7 | Expiry and revocation | Expired and revoked grants fail, revocation reaches everything delegated below, and a concurrent task keeps working |
@@ -114,14 +142,32 @@ latency, and denials of in-scope requests.
 ## Run
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e '.[test]'
+python -m venv .venv
+.venv/bin/pip install -r requirements-lock.txt
+.venv/bin/pip install --no-deps --no-build-isolation -e .
 .venv/bin/pytest -q
 .venv/bin/python -m ag1 --out results
+.venv/bin/python -m ag1 --verify results
 .venv/bin/python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 ```
 
 `results/results.md` uses the column layout of NCCoE's functional demonstration results (Demo ID,
-Expected Outcome, Observed Outcome, Comments). `results/results.json` has the same data.
+Expected Outcome, Observed Outcome, Comments) and adds an explicit result column.
+`results/results.json` has the same data. A run also exports:
+
+- `evidence.json`: the raw signed, hash-linked evidence records, authorization chains, trusted root,
+  evidence public key, and terminal hash;
+- `manifest.json`: the harness commit, platform, Python version, and installed package versions.
+
+The evidence bundle can be checked after the original process has exited.
+
+Or run the packaged harness in a container:
+
+```bash
+docker build -t nccoe-ag1-harness .
+docker run --rm -v "$PWD/results:/results" nccoe-ag1-harness
+docker run --rm -v "$PWD/results:/results" nccoe-ag1-harness --verify /results
+```
 
 ## What pressure testing found, and how it is handled
 
@@ -161,10 +207,14 @@ These came from attacking the harness, not from the ten steps as first written.
   model behavior or a real SCM.
 - The mock service executes the normalized arguments. A real gateway must forward the normalized
   form too, or the tool and the policy can disagree about what was requested.
+- Normalization, the reference enforcement point, and evidence signing are harness components, not
+  claims about the adapter. Every report identifies this responsibility split.
 - Revocation is installed at one enforcement point; distribution to many is not tested.
 - Misuse inside the granted scope is not prevented, only bounded. Code review, testing and branch
   protection remain necessary.
 - Only the Tenuo adapter exists so far.
+- Utility timing is local, automated harness processing. It does not represent network propagation,
+  policy review, or human approval latency.
 
 ## License
 

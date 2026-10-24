@@ -11,7 +11,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from . import report  # noqa: E402
 from .adapters import ADAPTERS, load  # noqa: E402
-from .steps import STEPS, utility_run  # noqa: E402
+from .steps import STEPS, evidence_run, utility_run  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,11 +19,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--adapter", default="tenuo",
                         help=f"registered name ({', '.join(ADAPTERS)}) or module:Class")
     parser.add_argument("--out", type=Path, default=Path("results"))
+    parser.add_argument("--verify", type=Path, metavar="RESULTS_DIR",
+                        help="verify an exported evidence bundle and exit")
     args = parser.parse_args(argv)
 
     adapter = load(args.adapter)
+    if args.verify is not None:
+        verification = report.verify_bundle(args.verify, adapter)
+        print(f"evidence: {verification}")
+        return 0 if verification["valid"] else 1
     results = [step(adapter) for step in STEPS]
     utility = utility_run(adapter)
+    evidence_world = evidence_run(adapter)
     print(f"implementation: {adapter.name} {adapter.version}")
     for r in results:
         print(f"{'MET    ' if r.passed else 'NOT MET'}  {r.step_id:8} {r.title}")
@@ -31,8 +38,9 @@ def main(argv: list[str] | None = None) -> int:
             if not c.passed:
                 print(f"           - {c.description}: expected {c.expected}, observed {c.observed} {c.detail}")
     print(f"\nutility: {utility}")
-    report.write(results, utility, args.out, adapter)
+    report.write(results, utility, args.out, adapter, evidence_world=evidence_world)
     print(f"wrote {args.out / 'results.md'}")
+    print(f"verify with: {parser.prog} --adapter {args.adapter} --verify {args.out}")
     return 0 if all(r.passed for r in results) and utility["mistaken_denials"] == 0 else 1
 
 

@@ -24,6 +24,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .adapters.base import Adapter, Principal
 from .scm import MockSCM
@@ -104,6 +105,9 @@ class EnforcementPoint:
     adapter: Adapter
     trusted_root: Principal
     scm: MockSCM
+    audience: str | None = None
+    trust_domain: str = "service-domain"
+    trusted_origin_principals: set[str] | None = None
     enforce: bool = True
     evidence: list[dict] = field(default_factory=list)
     _signer: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
@@ -115,6 +119,14 @@ class EnforcementPoint:
     @property
     def evidence_public_key(self) -> Ed25519PublicKey:
         return self._signer.public_key()
+
+    @property
+    def evidence_public_key_hex(self) -> str:
+        return self.evidence_public_key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+
+    @property
+    def evidence_head(self) -> str:
+        return self._head
 
     # Normalization (Comment 3): constraints are evaluated on the form the
     # tool will execute, not on the string the agent sent.
@@ -189,7 +201,15 @@ class EnforcementPoint:
             return decision
 
         try:
+            if self.audience is not None and canonical.get("audience") != self.audience:
+                raise Denied(f"AudienceMismatch: expected {self.audience}")
             self.verifier.authorize(req.chain, req.tool, req.args, canonical, req.proof, req.approvals)
+            if self.trusted_origin_principals is not None:
+                if not req.chain:
+                    raise Denied("OriginatingPrincipalMissing: no root grant")
+                origin = self.adapter.info(req.chain[0]).holder
+                if origin not in self.trusted_origin_principals:
+                    raise Denied("OriginatingPrincipalUntrusted: root holder is not trusted")
         except Denied as exc:
             decision = Decision(False, str(exc), canonical)
             self._record(req, decision)
@@ -218,7 +238,10 @@ class EnforcementPoint:
             "reason": decision.reason,
             "approvals": approvals,
             "root_principal": links[0]["issuer"] if links else None,
+            "originating_principal": links[0]["holder"] if links else None,
             "presenter": links[-1]["holder"] if links else None,
+            "audience": self.audience,
+            "enforcement_trust_domain": self.trust_domain,
             "task": links[0]["task"] if links else None,
             "delegation_lineage": links,
             "authorization_chain": self.adapter.encode_chain(req.chain) if req.chain else None,

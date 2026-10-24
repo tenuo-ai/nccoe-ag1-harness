@@ -12,6 +12,20 @@ from typing import Union
 
 
 @dataclass(frozen=True)
+class AdapterCapabilities:
+    """Architecture choices reported with every result.
+
+    They keep the harness from implying that holder-signed capability chains,
+    offline verification, or structured artifacts are the only conforming
+    implementation patterns.
+    """
+
+    delegation_mode: str  # holder_signed | authorization_server
+    verification_mode: str  # offline_chain | online_introspection | hybrid
+    artifact_mode: str  # structured_signed | opaque
+
+
+@dataclass(frozen=True)
 class Exact:
     value: str
 
