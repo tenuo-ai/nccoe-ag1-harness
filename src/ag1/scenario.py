@@ -28,6 +28,11 @@ RELEASE_TASK_ID = "release-app-1.4.2"
 ARTIFACT = "app:1.4.2"
 ARTIFACT_NEXT = "app:1.4.3"  # also deployable under the release grant, but not approved
 SUITES = ("unit", "parser")
+CONTROL_DOMAIN = "control.example"
+DEVELOPMENT_DOMAIN = "dev.example"
+TEST_DOMAIN = "test.example"
+TEST_AUDIENCE = "test-gateway.test.example"
+SCM_AUDIENCE = "scm-gateway.dev.example"
 
 
 def write_caps(branch: str = FIX_BRANCH, root: str = "/src/parser") -> dict:
@@ -36,6 +41,10 @@ def write_caps(branch: str = FIX_BRANCH, root: str = "/src/parser") -> dict:
 
 def test_caps(suites=SUITES) -> dict:
     return {"repo": Exact(REPO), "branch": Exact(FIX_BRANCH), "suite": OneOf(tuple(suites))}
+
+
+def cross_domain_test_caps(suites=SUITES, audience: str = TEST_AUDIENCE) -> dict:
+    return {**test_caps(suites), "audience": Exact(audience)}
 
 
 def task_caps(suites=SUITES) -> dict:
@@ -96,8 +105,12 @@ def build_world(adapter: Adapter | str | None = None) -> World:
     if adapter is None or isinstance(adapter, str):
         adapter = load(adapter or "tenuo")
     p = adapter.new_principal
-    issuer, approver = p("task-authorization-system"), p("release-manager")
-    orch, patch, runner, release = p("orchestrator"), p("patch-agent"), p("test-runner"), p("release-agent")
+    issuer = p("task-authorization-system", CONTROL_DOMAIN)
+    approver = p("release-manager", CONTROL_DOMAIN)
+    orch = p("orchestrator", DEVELOPMENT_DOMAIN)
+    patch = p("patch-agent", DEVELOPMENT_DOMAIN)
+    runner = p("test-runner", TEST_DOMAIN)
+    release = p("release-agent", DEVELOPMENT_DOMAIN)
 
     scm = MockSCM()
     gateway = EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm)

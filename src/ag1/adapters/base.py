@@ -13,12 +13,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from ..spec import ApprovalGate, Capabilities, GrantInfo
+from ..spec import AdapterCapabilities, ApprovalGate, Capabilities, GrantInfo
 
 
 @runtime_checkable
 class Principal(Protocol):
     name: str
+    trust_domain: str
 
     @property
     def public_id(self) -> str:
@@ -49,8 +50,9 @@ class Verifier(Protocol):
 class Adapter(Protocol):
     name: str
     version: str
+    capabilities: AdapterCapabilities
 
-    def new_principal(self, name: str) -> Principal: ...
+    def new_principal(self, name: str, trust_domain: str = "local") -> Principal: ...
 
     def issue(self, issuer: Principal, holder: Principal, caps: Capabilities, ttl: int,
               task: str | None = None, gate: ApprovalGate | None = None) -> Any:
@@ -58,11 +60,13 @@ class Adapter(Protocol):
 
     def delegate(self, parent: Any, parent_holder: Principal, child: Principal, caps: Capabilities,
                  ttl: int, terminal: bool = False) -> Any:
-        """Derive a child grant signed by `parent_holder`.
+        """Obtain a child grant authorized by `parent_holder` and `parent`.
 
-        Raise `spec.DelegationRejected` if the child would widen the parent, if
-        `parent_holder` does not hold `parent`, or if `parent` cannot delegate.
-        An adapter may instead clamp a requested lifetime to the parent's.
+        The adapter may have the holder sign the child or may exchange the
+        parent at an authorization server. Raise `spec.DelegationRejected` if
+        the child would widen the parent, if `parent_holder` does not hold
+        `parent`, or if `parent` cannot delegate. An adapter may instead clamp
+        a requested lifetime to the parent's.
         """
 
     def prove(self, chain: list, holder: Principal, tool: str, args: dict) -> Any:
@@ -72,7 +76,8 @@ class Adapter(Protocol):
                 ttl: int | None = None) -> Any:
         """A signed approval bound to this exact request, valid for `ttl` seconds (adapter default if None)."""
 
-    def verifier(self, trusted_root: Principal) -> Verifier: ...
+    def verifier(self, trusted_root: Principal | str) -> Verifier:
+        """Create a verifier from a principal or its portable public identifier."""
 
     def info(self, grant: Any) -> GrantInfo: ...
 

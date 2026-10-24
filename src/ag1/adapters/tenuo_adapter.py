@@ -13,6 +13,7 @@ from tenuo import (
     NonceStore,
     SignedRevocationList,
     SigningKey,
+    PublicKey,
     Warrant,
     compute_request_hash,
     decode_warrant_stack_base64,
@@ -27,6 +28,7 @@ from .. import spec
 class TenuoPrincipal:
     name: str
     key: SigningKey
+    trust_domain: str = "local"
 
     @property
     def public_id(self) -> str:
@@ -67,8 +69,10 @@ class TenuoVerifier:
     enforcement point remembers what it has seen, so this verifier does.
     """
 
-    def __init__(self, root: TenuoPrincipal) -> None:
-        self._authorizer = Authorizer(trusted_roots=[root.key.public_key])
+    def __init__(self, root: TenuoPrincipal | str) -> None:
+        public_key = (PublicKey.from_bytes(bytes.fromhex(root))
+                      if isinstance(root, str) else root.key.public_key)
+        self._authorizer = Authorizer(trusted_roots=[public_key])
         self._authorizer.set_clock_tolerance(CLOCK_TOLERANCE_SECS)
         self._nonces = NonceStore(ttl_seconds=self._authorizer.pop_validity_secs() + CLOCK_TOLERANCE_SECS)
         self._used_approvals: set[bytes] = set()
@@ -106,9 +110,19 @@ class TenuoVerifier:
 class TenuoAdapter:
     name = "tenuo"
     version = tenuo.__version__
+    capabilities = spec.AdapterCapabilities(
+        delegation_mode="holder_signed",
+        verification_mode="offline_chain",
+        artifact_mode="structured_signed",
+    )
 
-    def new_principal(self, name: str) -> TenuoPrincipal:
-        return TenuoPrincipal(name, SigningKey.generate())
+    def __init__(self) -> None:
+        self._trust_domains: dict[str, str] = {}
+
+    def new_principal(self, name: str, trust_domain: str = "local") -> TenuoPrincipal:
+        principal = TenuoPrincipal(name, SigningKey.generate(), trust_domain)
+        self._trust_domains[principal.public_id] = trust_domain
+        return principal
 
     def issue(self, issuer, holder, caps, ttl, task=None, gate=None):
         b = _apply(Warrant.mint_builder(), caps)
@@ -149,6 +163,10 @@ class TenuoAdapter:
             tools=list(grant.tools),
             expires_at=str(grant.expires_at()),
             task=grant.session_id,
+            extra={
+                "issuer_trust_domain": self._trust_domains.get(grant.issuer.to_bytes().hex(), "unknown"),
+                "holder_trust_domain": self._trust_domains.get(grant.authorized_holder.to_bytes().hex(), "unknown"),
+            },
         )
 
     def approval_info(self, approval) -> dict:

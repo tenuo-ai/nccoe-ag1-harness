@@ -12,6 +12,30 @@ from typing import Union
 
 
 @dataclass(frozen=True)
+class AdapterCapabilities:
+    """Architecture choices reported with every result.
+
+    They keep the harness from implying that holder-signed capability chains,
+    offline verification, or structured artifacts are the only conforming
+    implementation patterns.
+    """
+
+    delegation_mode: str  # holder_signed | authorization_server
+    verification_mode: str  # offline_chain | online_introspection | hybrid
+    artifact_mode: str  # structured_signed | opaque
+
+    def __post_init__(self) -> None:
+        allowed = {
+            "delegation_mode": ("holder_signed", "authorization_server"),
+            "verification_mode": ("offline_chain", "online_introspection", "hybrid"),
+            "artifact_mode": ("structured_signed", "opaque"),
+        }
+        for name, values in allowed.items():
+            if getattr(self, name) not in values:
+                raise ValueError(f"{name} must be one of {values}, not {getattr(self, name)!r}")
+
+
+@dataclass(frozen=True)
 class Exact:
     value: str
 

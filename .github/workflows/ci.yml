@@ -2,6 +2,7 @@ name: ag1
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -11,18 +12,31 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash  # -eo pipefail, so tee cannot hide a failed run
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
-      - run: pip install -e '.[test]'
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install --require-hashes -r requirements-lock.txt
+      - run: pip install --no-deps --no-build-isolation -e .
       - run: pytest -q
-      - run: python -m ag1 --out results
-      - uses: actions/upload-artifact@v4
+      # The anchors stay in this job's log and outside results/, so the uploaded
+      # bundle is verified against keys it cannot supply itself.
+      - run: python -m ag1 --out results | tee "$RUNNER_TEMP/run.log"
+      - run: |
+          python -m ag1 --verify results $(sed -n 's/^anchors: //p' "$RUNNER_TEMP/run.log")
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
-          name: ag1-results
+          name: ag1-results-py${{ matrix.python-version }}
           path: results/

@@ -20,10 +20,16 @@ from .gateway import GENESIS, EnforcementPoint, Request, record_payload
 from .scenario import (
     ARTIFACT,
     ARTIFACT_NEXT,
+    CONTROL_DOMAIN,
+    DEVELOPMENT_DOMAIN,
     FIX_BRANCH,
     REPO,
+    SCM_AUDIENCE,
+    TEST_AUDIENCE,
+    TEST_DOMAIN,
     Agent,
     build_world,
+    cross_domain_test_caps,
     test_caps,
     write_caps,
 )
@@ -39,6 +45,7 @@ class Check:
     observed: str
     passed: bool
     detail: str = ""
+    applicable: bool = True
 
 
 @dataclass
@@ -51,7 +58,11 @@ class StepResult:
 
     @property
     def passed(self) -> bool:
-        return all(c.passed for c in self.checks)
+        return all(c.passed for c in self.checks if c.applicable)
+
+    @property
+    def not_applicable(self) -> int:
+        return sum(not c.applicable for c in self.checks)
 
     def decision(self, description: str, decision, want_allowed: bool) -> None:
         want = "allowed" if want_allowed else "denied"
@@ -60,6 +71,26 @@ class StepResult:
 
     def fact(self, description: str, expected: str, observed: str, passed: bool, detail: str = "") -> None:
         self.checks.append(Check(description, expected, observed, passed, detail))
+
+    def inapplicable(self, description: str, expected: str, reason: str) -> None:
+        """Record a check the implementation's architecture cannot be tested by.
+
+        It is reported as not applicable, never as met.
+        """
+        self.checks.append(Check(description, expected, "not applicable", False, reason, applicable=False))
+
+
+def _verified_how(adapter) -> str:
+    """How chain checks are described: only a declared offline verifier is credited with offline checks."""
+    mode = adapter.capabilities.verification_mode
+    return "offline" if mode == "offline_chain" else f"through the declared {mode} verifier"
+
+
+def _offline_or_inapplicable(r: "StepResult", adapter) -> None:
+    mode = adapter.capabilities.verification_mode
+    if mode != "offline_chain":
+        r.inapplicable("verification without contacting the issuer", "offline from a trusted root",
+                       f"declared verification mode is {mode}")
 
 
 def _delegation(fn) -> tuple[str, str]:
@@ -164,9 +195,11 @@ def ag1_03(adapter=None) -> StepResult:
 
 
 def ag1_04(adapter=None) -> StepResult:
-    r = StepResult("AG-1.4", "Delegation",
-                   "The narrower child is accepted. Every widening attempt is rejected, and a requested lifetime "
-                   "longer than the parent's is either rejected or limited to the parent's expiry.")
+    r = StepResult("AG-1.4", "Delegation across a simulated trust boundary",
+                   "A receiving enforcement point accepts a narrower child across a trust boundary only after "
+                   "validating the originating principal, intended audience, delegation chain, and trusted issuer. "
+                   "Every widening attempt is rejected, and a requested lifetime longer than the parent's is "
+                   "either rejected or limited to the parent's expiry.")
     w = build_world(adapter)
     a = w.adapter
     patch = w.patch_agent.chain[-1]
@@ -205,8 +238,72 @@ def ag1_04(adapter=None) -> StepResult:
                "rejected, or never outlives the parent",
                "accepted with expiry clamped to the parent's" if clamped else "accepted beyond parent expiry",
                clamped, f"child {a.info(longer).expires_at}, parent {a.info(patch).expires_at}")
+
+    # Cross a workload/service trust boundary. The receiving gateway has its
+    # own audience and origin trust configuration and trusts only the same root.
+    cross_caps = {"test.run": cross_domain_test_caps()}
+    cross_root = a.issue(w.issuer, w.orchestrator.principal, cross_caps, ttl=900)
+    cross_patch = a.delegate(cross_root, w.orchestrator.principal, w.patch_agent.principal,
+                             cross_caps, ttl=600)
+    remote_runner = a.new_principal("remote-test-runner", TEST_DOMAIN)
+    remote_grant = a.delegate(
+        cross_patch, pk, remote_runner, cross_caps, ttl=300, terminal=True,
+    )
+    remote = w.agent(remote_runner, [cross_root, cross_patch, remote_grant])
+    receiving = EnforcementPoint(
+        adapter=a,
+        trusted_root=w.issuer,
+        scm=w.scm,
+        audience=TEST_AUDIENCE,
+        trust_domain=TEST_DOMAIN,
+        trusted_origin_principals={w.orchestrator.principal.public_id},
+    )
+    remote_args = {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser", "audience": TEST_AUDIENCE}
+    r.decision("receiving enforcement point accepts the narrower child from another trust domain",
+               receiving.handle(remote.request("test.run", remote_args)), True)
+    r.decision("same chain names the wrong intended audience",
+               receiving.handle(remote.request("test.run", {**remote_args, "audience": SCM_AUDIENCE},
+                                              intent="attack")), False)
+    other_service = EnforcementPoint(
+        adapter=a, trusted_root=w.issuer, scm=w.scm, audience=SCM_AUDIENCE,
+        trust_domain=DEVELOPMENT_DOMAIN,
+        trusted_origin_principals={w.orchestrator.principal.public_id},
+    )
+    r.decision("grant for the test service is presented to a different service",
+               other_service.handle(remote.request("test.run", remote_args, intent="attack")), False)
+    # The request names the other service's audience, so that service's own
+    # comparison passes and only the grant's audience constraint can refuse it.
+    r.decision("grant names the test service; signed request names the other service's audience",
+               other_service.handle(remote.request("test.run", {**remote_args, "audience": SCM_AUDIENCE},
+                                                   intent="attack")), False)
+
+    foreign_origin = a.new_principal("foreign-orchestrator", DEVELOPMENT_DOMAIN)
+    foreign_runner = a.new_principal("foreign-test-runner", TEST_DOMAIN)
+    foreign_root = a.issue(w.issuer, foreign_origin, {"test.run": cross_domain_test_caps()}, ttl=600)
+    foreign_child = a.delegate(
+        foreign_root, foreign_origin, foreign_runner, {"test.run": cross_domain_test_caps()}, ttl=300,
+        terminal=True,
+    )
+    foreign = w.agent(foreign_runner, [foreign_root, foreign_child])
+    r.decision("trusted issuer but unrecognized originating principal",
+               receiving.handle(foreign.request("test.run", remote_args, intent="attack")), False)
+
+    untrusted_issuer = a.new_principal("untrusted-task-authorization-system", CONTROL_DOMAIN)
+    alien_runner = a.new_principal("alien-test-runner", TEST_DOMAIN)
+    alien_root = a.issue(untrusted_issuer, w.orchestrator.principal,
+                         {"test.run": cross_domain_test_caps()}, ttl=600)
+    alien_child = a.delegate(alien_root, w.orchestrator.principal, alien_runner,
+                             {"test.run": cross_domain_test_caps()}, ttl=300, terminal=True)
+    alien = w.agent(alien_runner, [alien_root, alien_child])
+    r.decision("correct audience and origin but chain begins at an untrusted issuer",
+               receiving.handle(alien.request("test.run", remote_args, intent="attack")), False)
     r.comments = ("Widening tools and constraints, and delegating past a terminal grant, must be rejected. A longer "
-                  "requested lifetime may be rejected or clamped, as long as the child never outlives its parent.")
+                  "requested lifetime may be rejected or clamped, as long as the child never outlives its parent. "
+                  "The trust boundary is simulated: a second enforcement point with its own configuration in the "
+                  "same process, and trust domains are scenario labels, not grant contents. The adapter supplies "
+                  "chain verification against the trusted issuer and the audience constraint inside the grant; the "
+                  "AG-1 reference enforcement point supplies the comparison with its own audience and the "
+                  "originating-principal allowlist.")
     return r
 
 
@@ -332,24 +429,32 @@ def verify_evidence(gateway: EnforcementPoint, adapter: Adapter, issuer) -> list
     return out
 
 
-def ag1_08(adapter=None) -> StepResult:
-    r = StepResult("AG-1.8", "Audit reconstruction",
-                   "Evidence identifies the root principal, each delegation step, constraints, decisions, "
-                   "approvals, and action outcomes.")
+def evidence_run(adapter=None):
+    """Produce the representative evidence bundle used by AG-1.8 and exports."""
     w = build_world(adapter)
     a = w.adapter
     w.call(w.patch_agent, "repo.write", WRITE_OK)
     w.call(w.patch_agent, "repo.write", {**WRITE_OK, "branch": "main"}, intent="attack")
     w.call(w.test_runner, "test.run", {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser"})
     ra = w.release_agent
-    approval = a.approve(w.release_approver, ra.chain[-1], ra.principal, "deploy.staging", {"artifact": ARTIFACT})
+    approval = a.approve(w.release_approver, ra.chain[-1], ra.principal,
+                         "deploy.staging", {"artifact": ARTIFACT})
     w.call(ra, "deploy.staging", {"artifact": ARTIFACT}, approvals=[approval])
+    return w
+
+
+def ag1_08(adapter=None) -> StepResult:
+    r = StepResult("AG-1.8", "Audit reconstruction",
+                   "Evidence identifies the root principal, each delegation step, constraints, decisions, "
+                   "approvals, and action outcomes.")
+    w = evidence_run(adapter)
+    a = w.adapter
 
     audited = verify_evidence(w.gateway, a, w.issuer)
     r.fact("every record's signature verifies", "all valid",
            f"{sum(x['signature_valid'] for x in audited)}/{len(audited)} valid",
            all(x["signature_valid"] for x in audited))
-    r.fact("every record's authorization chain re-verifies offline from the root key", "all verify",
+    r.fact(f"every record's authorization chain re-verifies {_verified_how(a)} from the root key", "all verify",
            f"{sum(x['chain'] is True for x in audited)}/{len(audited)} verify",
            all(x["chain"] is True for x in audited))
     names = {p.public_id: p.name for p in (w.issuer, w.orchestrator.principal, w.patch_agent.principal,
@@ -389,6 +494,7 @@ def ag1_08(adapter=None) -> StepResult:
                   "point's evidence key, not the logging system's word. Each record includes the hash of the one "
                   "before it; deleting the newest records is only detectable if the latest hash is anchored "
                   "elsewhere, for example in a transparency log.")
+    _offline_or_inapplicable(r, a)
     return r
 
 
@@ -401,26 +507,30 @@ def ag1_09(adapter=None) -> StepResult:
     verifier = a.verifier(w.issuer)
     patch = w.patch_agent.chain[-1]
 
-    raw = a.to_bytes(patch)
-    original = a.signed_content(patch)
-    rejected = accepted_altered = envelope_only = 0
-    for i in range(len(raw)):
-        mutated = bytearray(raw)
-        mutated[i] ^= 0x01
-        try:
-            forged = a.from_bytes(bytes(mutated))
-            verifier.verify_chain([w.task_grant, forged])
-        except Exception:
-            rejected += 1
-            continue
-        if a.signed_content(forged) != original:
-            accepted_altered += 1
-        else:
-            envelope_only += 1
-    r.fact(f"every single-bit change to the grant ({len(raw)} positions)",
-           "no change to signed content accepted", f"{accepted_altered} accepted with altered content",
-           accepted_altered == 0,
-           f"{rejected} rejected; {envelope_only} envelope-only changes left the signed content unchanged")
+    if a.capabilities.artifact_mode == "structured_signed":
+        raw = a.to_bytes(patch)
+        original = a.signed_content(patch)
+        rejected = accepted_altered = envelope_only = 0
+        for i in range(len(raw)):
+            mutated = bytearray(raw)
+            mutated[i] ^= 0x01
+            try:
+                forged = a.from_bytes(bytes(mutated))
+                verifier.verify_chain([w.task_grant, forged])
+            except Exception:
+                rejected += 1
+                continue
+            if a.signed_content(forged) != original:
+                accepted_altered += 1
+            else:
+                envelope_only += 1
+        r.fact(f"every single-bit change to the grant ({len(raw)} positions)",
+               "no change to signed content accepted", f"{accepted_altered} accepted with altered content",
+               accepted_altered == 0,
+               f"{rejected} rejected; {envelope_only} envelope-only changes left the signed content unchanged")
+    else:
+        r.inapplicable("every single-bit change to the grant", "no change to signed content accepted",
+                       f"declared {a.capabilities.artifact_mode} artifacts expose no signed content to mutate")
 
     other_root = a.new_principal("untrusted-issuer")
     alien = a.issue(other_root, w.orchestrator.principal,
@@ -430,8 +540,9 @@ def ag1_09(adapter=None) -> StepResult:
     spliced = w.agent(w.patch_agent.principal, [w.task_grant, alien_child])
     r.decision("valid link from another chain spliced under the real root",
                w.gateway.handle(spliced.request("repo.write", {**WRITE_OK, "branch": "main"}, intent="attack")), False)
-    for desc, chain in [("auditor's offline check of a spliced chain", [w.task_grant, alien_child]),
-                        ("auditor's offline check of a chain from an untrusted root", [alien, alien_child])]:
+    how = _verified_how(a)
+    for desc, chain in [(f"auditor's check ({how}) of a spliced chain", [w.task_grant, alien_child]),
+                        (f"auditor's check ({how}) of a chain from an untrusted root", [alien, alien_child])]:
         try:
             verifier.verify_chain(chain)
             outcome = "accepted"
@@ -456,6 +567,7 @@ def ag1_09(adapter=None) -> StepResult:
     r.comments = ("Verification uses only the trusted root key; the harness has no issuer endpoint to call. "
                   "Envelope-only changes are reported separately: they do not change authority, but they mean "
                   "the byte encoding of a grant is not unique.")
+    _offline_or_inapplicable(r, a)
     return r
 
 

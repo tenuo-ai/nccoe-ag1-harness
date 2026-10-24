@@ -1,0 +1,7 @@
+# Inputs for requirements-lock.txt: runtime, test, and the build backend used by
+# `pip install --no-build-isolation`. Keep in step with pyproject.toml.
+tenuo==0.3.3
+cryptography==50.0.2
+cbor2==6.1.5
+pytest==9.1.1
+setuptools==82.0.0
