@@ -7,7 +7,7 @@ cryptography==50.0.2
 iniconfig==2.3.1
 packaging==26.3
 pluggy==1.7.0
-pycparser==3.12
+pycparser==3.11
 pydantic==2.14.1
 pydantic-core==2.50.1
 Pygments==2.21.0
