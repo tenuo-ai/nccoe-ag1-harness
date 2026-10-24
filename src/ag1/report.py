@@ -121,18 +121,28 @@ def _package_versions() -> dict[str, str]:
     return out
 
 
-def _write_evidence(directory: Path, world) -> None:
-    bundle = {
+HEADER_FIELDS = ("schema", "implementation", "trusted_root")
+
+
+def _bundle_header(adapter, trusted_root: str) -> dict:
+    return {
         "schema": "ag1-evidence-v1",
         "implementation": {
-            "name": world.adapter.name,
-            "version": world.adapter.version,
-            "capabilities": world.adapter.capabilities.__dict__,
+            "name": adapter.name,
+            "version": adapter.version,
+            "capabilities": dict(adapter.capabilities.__dict__),
         },
-        "trusted_root": world.issuer.public_id,
+        "trusted_root": trusted_root,
+    }
+
+
+def _write_evidence(directory: Path, world) -> None:
+    header = _bundle_header(world.adapter, world.issuer.public_id)
+    bundle = {
+        **header,
         "evidence_public_key": world.gateway.evidence_public_key_hex,
         "terminal_hash": world.gateway.evidence_head,
-        "checkpoint": world.gateway.checkpoint(),
+        "checkpoint": world.gateway.checkpoint(header),
         "records": world.gateway.evidence,
     }
     (directory / "evidence.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")
@@ -193,7 +203,8 @@ def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str
         body = signed["checkpoint"]
         public_key.verify(bytes.fromhex(signed["signature"]), record_payload(body))
         checkpoint_valid = (body.get("type") == "ag1-evidence-checkpoint"
-                            and body.get("records") == count and body.get("terminal_hash") == terminal_hash)
+                            and body.get("records") == count and body.get("terminal_hash") == terminal_hash
+                            and body.get("header") == {k: bundle.get(k) for k in HEADER_FIELDS})
     except (KeyError, ValueError, TypeError, AttributeError, InvalidSignature):
         pass
     chained = sum(1 for item in records

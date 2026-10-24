@@ -128,9 +128,14 @@ class EnforcementPoint:
     def evidence_head(self) -> str:
         return self._head
 
-    def checkpoint(self) -> dict:
-        """Sign the current head and record count, so dropping trailing records is detectable."""
-        body = {"type": "ag1-evidence-checkpoint", "terminal_hash": self._head, "records": len(self.evidence)}
+    def checkpoint(self, header: dict | None = None) -> dict:
+        """Sign the current head, record count, and bundle header.
+
+        Dropping trailing records, or editing the header (implementation,
+        declared capabilities, trusted root), is then detectable.
+        """
+        body = {"type": "ag1-evidence-checkpoint", "terminal_hash": self._head, "records": len(self.evidence),
+                "header": header or {}}
         return {"checkpoint": body, "signature": self._signer.sign(record_payload(body)).hex()}
 
     # Normalization (Comment 3): constraints are evaluated on the form the

@@ -87,6 +87,32 @@ def test_truncated_bundle_fails_even_with_recomputed_head(tmp_path, keep):
     assert result["terminal_hash_valid"] and not result["checkpoint_valid"] and not result["valid"]
 
 
+@pytest.mark.parametrize("field,value", [
+    ("version", "9.9.9"),
+    ("capabilities", {"delegation_mode": "authorization_server", "verification_mode": "online_introspection",
+                      "artifact_mode": "opaque"}),
+])
+def test_edited_implementation_header_fails(tmp_path, field, value):
+    world = evidence_run(ADAPTER)
+    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    path = tmp_path / "evidence.json"
+    bundle = json.loads(path.read_text())
+    bundle["implementation"][field] = value
+    path.write_text(json.dumps(bundle))
+    result = report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))
+    assert not result["checkpoint_valid"] and not result["valid"]
+
+
+def test_online_verifier_is_not_credited_with_offline_checks():
+    class OnlineDeclared(type(ADAPTER)):
+        capabilities = AdapterCapabilities("authorization_server", "online_introspection", "structured_signed")
+
+    for step in (STEPS[7], STEPS[8]):  # AG-1.8, AG-1.9
+        result = step(OnlineDeclared())
+        assert result.not_applicable >= 1
+        assert not any("offline" in c.description for c in result.checks if c.applicable)
+
+
 def test_bundle_naming_another_root_fails(tmp_path):
     world = evidence_run(ADAPTER)
     report.write([], {}, tmp_path, ADAPTER, evidence_world=world)

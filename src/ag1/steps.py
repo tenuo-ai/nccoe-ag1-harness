@@ -80,6 +80,19 @@ class StepResult:
         self.checks.append(Check(description, expected, "not applicable", False, reason, applicable=False))
 
 
+def _verified_how(adapter) -> str:
+    """How chain checks are described: only a declared offline verifier is credited with offline checks."""
+    mode = adapter.capabilities.verification_mode
+    return "offline" if mode == "offline_chain" else f"through the declared {mode} verifier"
+
+
+def _offline_or_inapplicable(r: "StepResult", adapter) -> None:
+    mode = adapter.capabilities.verification_mode
+    if mode != "offline_chain":
+        r.inapplicable("verification without contacting the issuer", "offline from a trusted root",
+                       f"declared verification mode is {mode}")
+
+
 def _delegation(fn) -> tuple[str, str]:
     try:
         fn()
@@ -441,7 +454,7 @@ def ag1_08(adapter=None) -> StepResult:
     r.fact("every record's signature verifies", "all valid",
            f"{sum(x['signature_valid'] for x in audited)}/{len(audited)} valid",
            all(x["signature_valid"] for x in audited))
-    r.fact("every record's authorization chain re-verifies offline from the root key", "all verify",
+    r.fact(f"every record's authorization chain re-verifies {_verified_how(a)} from the root key", "all verify",
            f"{sum(x['chain'] is True for x in audited)}/{len(audited)} verify",
            all(x["chain"] is True for x in audited))
     names = {p.public_id: p.name for p in (w.issuer, w.orchestrator.principal, w.patch_agent.principal,
@@ -481,6 +494,7 @@ def ag1_08(adapter=None) -> StepResult:
                   "point's evidence key, not the logging system's word. Each record includes the hash of the one "
                   "before it; deleting the newest records is only detectable if the latest hash is anchored "
                   "elsewhere, for example in a transparency log.")
+    _offline_or_inapplicable(r, a)
     return r
 
 
@@ -526,8 +540,9 @@ def ag1_09(adapter=None) -> StepResult:
     spliced = w.agent(w.patch_agent.principal, [w.task_grant, alien_child])
     r.decision("valid link from another chain spliced under the real root",
                w.gateway.handle(spliced.request("repo.write", {**WRITE_OK, "branch": "main"}, intent="attack")), False)
-    for desc, chain in [("auditor's offline check of a spliced chain", [w.task_grant, alien_child]),
-                        ("auditor's offline check of a chain from an untrusted root", [alien, alien_child])]:
+    how = _verified_how(a)
+    for desc, chain in [(f"auditor's check ({how}) of a spliced chain", [w.task_grant, alien_child]),
+                        (f"auditor's check ({how}) of a chain from an untrusted root", [alien, alien_child])]:
         try:
             verifier.verify_chain(chain)
             outcome = "accepted"
@@ -552,6 +567,7 @@ def ag1_09(adapter=None) -> StepResult:
     r.comments = ("Verification uses only the trusted root key; the harness has no issuer endpoint to call. "
                   "Envelope-only changes are reported separately: they do not change authority, but they mean "
                   "the byte encoding of a grant is not unique.")
+    _offline_or_inapplicable(r, a)
     return r
 
 
