@@ -19,7 +19,7 @@ ADAPTER = load(os.environ.get("AG1_ADAPTER", "tenuo"))
 @pytest.mark.parametrize("step", STEPS, ids=lambda s: s.__name__)
 def test_step_meets_expected_outcome(step):
     result = step(ADAPTER)
-    failed = [c for c in result.checks if not c.passed]
+    failed = [c for c in result.checks if c.applicable and not c.passed]
     assert not failed, [(c.description, c.expected, c.observed, c.detail) for c in failed]
 
 
@@ -69,6 +69,22 @@ def test_resigned_bundle_fails_against_independent_anchors(tmp_path):
     assert not result["valid"]
     assert not result["evidence_key_matches"]
     assert result["signatures_valid"] == 0
+
+
+@pytest.mark.parametrize("keep", [1, 0], ids=["drop-suffix", "drop-all"])
+def test_truncated_bundle_fails_even_with_recomputed_head(tmp_path, keep):
+    world = evidence_run(ADAPTER)
+    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    path = tmp_path / "evidence.json"
+    bundle = json.loads(path.read_text())
+    bundle["records"] = bundle["records"][:keep]
+    head = GENESIS
+    for item in bundle["records"]:
+        head = hashlib.sha256(record_payload(item["record"]) + bytes.fromhex(item["signature"])).hexdigest()
+    bundle["terminal_hash"] = head
+    path.write_text(json.dumps(bundle))
+    result = report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))
+    assert result["terminal_hash_valid"] and not result["checkpoint_valid"] and not result["valid"]
 
 
 def test_bundle_naming_another_root_fails(tmp_path):

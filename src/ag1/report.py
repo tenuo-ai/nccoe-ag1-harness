@@ -95,10 +95,17 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter) -> str:
 def _git_commit() -> str:
     if os.environ.get("GITHUB_SHA"):
         return os.environ["GITHUB_SHA"]
+    source = Path(__file__).resolve().parent
     try:
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
-        ).stdout.strip()
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=source, check=True,
+                             capture_output=True, text=True).stdout.strip()
+        if Path(top).resolve() != source.parent.parent:  # src/ag1 inside the harness checkout
+            return "unknown"
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source, check=True,
+                                capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain"], cwd=source, check=True,
+                               capture_output=True, text=True).stdout.strip()
+        return f"{commit}-dirty" if dirty else commit
     except (OSError, subprocess.SubprocessError):
         return "unknown"
 
@@ -125,6 +132,7 @@ def _write_evidence(directory: Path, world) -> None:
         "trusted_root": world.issuer.public_id,
         "evidence_public_key": world.gateway.evidence_public_key_hex,
         "terminal_hash": world.gateway.evidence_head,
+        "checkpoint": world.gateway.checkpoint(),
         "records": world.gateway.evidence,
     }
     (directory / "evidence.json").write_text(json.dumps(bundle, indent=2), encoding="utf-8")
@@ -132,6 +140,9 @@ def _write_evidence(directory: Path, world) -> None:
 
 def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
     """Verify an exported evidence bundle against anchors obtained outside it.
+
+    A signed checkpoint over the final head and record count makes removing
+    trailing records (or all of them) detectable.
 
     The trusted root and the evidence signing key must come from somewhere the
     bundle's author cannot rewrite afterwards (a CI log, a published key). Keys
@@ -176,6 +187,15 @@ def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str
             except Exception:
                 pass
     count = len(records)
+    checkpoint_valid = False
+    try:
+        signed = bundle["checkpoint"]
+        body = signed["checkpoint"]
+        public_key.verify(bytes.fromhex(signed["signature"]), record_payload(body))
+        checkpoint_valid = (body.get("type") == "ag1-evidence-checkpoint"
+                            and body.get("records") == count and body.get("terminal_hash") == terminal_hash)
+    except (KeyError, ValueError, TypeError, AttributeError, InvalidSignature):
+        pass
     chained = sum(1 for item in records
                   if isinstance(item, dict) and isinstance(item.get("record"), dict)
                   and item["record"].get("authorization_chain"))
@@ -186,8 +206,9 @@ def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str
         "links_valid": links,
         "chains_valid": chains,
         "terminal_hash_valid": terminal_hash == bundle.get("terminal_hash"),
-        "valid": all(anchors.values()) and signatures == count and links == count
-                 and chains == chained and terminal_hash == bundle.get("terminal_hash"),
+        "checkpoint_valid": checkpoint_valid,
+        "valid": all(anchors.values()) and signatures == count and links == count and chains == chained
+                 and terminal_hash == bundle.get("terminal_hash") and checkpoint_valid,
     }
 
 

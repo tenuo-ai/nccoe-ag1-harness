@@ -258,6 +258,11 @@ def ag1_04(adapter=None) -> StepResult:
     )
     r.decision("grant for the test service is presented to a different service",
                other_service.handle(remote.request("test.run", remote_args, intent="attack")), False)
+    # The request names the other service's audience, so that service's own
+    # comparison passes and only the grant's audience constraint can refuse it.
+    r.decision("grant names the test service; signed request names the other service's audience",
+               other_service.handle(remote.request("test.run", {**remote_args, "audience": SCM_AUDIENCE},
+                                                   intent="attack")), False)
 
     foreign_origin = a.new_principal("foreign-orchestrator", DEVELOPMENT_DOMAIN)
     foreign_runner = a.new_principal("foreign-test-runner", TEST_DOMAIN)

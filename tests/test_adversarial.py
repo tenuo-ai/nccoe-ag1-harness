@@ -14,7 +14,7 @@ from ag1 import steps
 from ag1.adapters.tenuo_adapter import TenuoAdapter, TenuoVerifier
 from ag1.gateway import GENESIS, EnforcementPoint, Request
 from ag1.scenario import ARTIFACT, FIX_BRANCH, REPO, build_world
-from ag1.spec import Denied, DelegationRejected
+from ag1.spec import AnyValue, Denied, DelegationRejected
 
 WRITE = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.c", "content": "x"}
 
@@ -241,6 +241,19 @@ def _issue_without_gate(self, issuer, holder, caps, ttl, task=None, gate=None):
     return TenuoAdapter.issue(self, issuer, holder, caps, ttl, task=task, gate=None)
 
 
+def _without_audience(caps):
+    return {tool: {k: (AnyValue() if k == "audience" else v) for k, v in constraints.items()}
+            for tool, constraints in caps.items()}
+
+
+def _issue_without_audience(self, issuer, holder, caps, ttl, task=None, gate=None):
+    return TenuoAdapter.issue(self, issuer, holder, _without_audience(caps), ttl, task=task, gate=gate)
+
+
+def _delegate_without_audience(self, parent, parent_holder, child, caps, ttl, terminal=False):
+    return TenuoAdapter.delegate(self, parent, parent_holder, child, _without_audience(caps), ttl, terminal)
+
+
 SABOTAGE = {
     "verifier allows everything": (lambda: adapter_with(AllowAll), ["ag1_01", "ag1_02", "ag1_03", "ag1_05",
                                                                     "ag1_06", "ag1_07", "ag1_09", "ag1_10"]),
@@ -250,6 +263,8 @@ SABOTAGE = {
     "chain verification skipped": (lambda: adapter_with(NoChainCheck), ["ag1_09"]),
     "delegation not checked": (lambda: adapter_with(delegate=_delegate_without_checks), ["ag1_04", "ag1_09"]),
     "approval gate dropped": (lambda: adapter_with(issue=_issue_without_gate), ["ag1_06"]),
+    "grant audience not enforced": (lambda: adapter_with(issue=_issue_without_audience,
+                                                         delegate=_delegate_without_audience), ["ag1_04"]),
 }
 
 
