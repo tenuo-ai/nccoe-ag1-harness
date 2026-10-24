@@ -113,6 +113,23 @@ def test_online_verifier_is_not_credited_with_offline_checks():
         assert not any("offline" in c.description for c in result.checks if c.applicable)
 
 
+@pytest.mark.parametrize("edit", [
+    lambda b: b.update(implementation=None),
+    lambda b: b.update(records=None),
+    lambda b: b["records"].__setitem__(0, {"record": "not an object", "signature": "00"}),
+    lambda b: b["records"].__setitem__(0, 7),
+    lambda b: b.update(checkpoint=[]),
+], ids=["implementation-null", "records-null", "record-string", "record-number", "checkpoint-list"])
+def test_malformed_bundle_is_invalid_not_a_crash(tmp_path, edit):
+    world = evidence_run(ADAPTER)
+    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    path = tmp_path / "evidence.json"
+    bundle = json.loads(path.read_text())
+    edit(bundle)
+    path.write_text(json.dumps(bundle))
+    assert not report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))["valid"]
+
+
 def test_bundle_naming_another_root_fails(tmp_path):
     world = evidence_run(ADAPTER)
     report.write([], {}, tmp_path, ADAPTER, evidence_world=world)

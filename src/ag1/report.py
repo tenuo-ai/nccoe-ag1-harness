@@ -149,6 +149,14 @@ def _write_evidence(directory: Path, world) -> None:
 
 
 def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
+    """Verify an exported evidence bundle; a malformed bundle is invalid, never a crash."""
+    try:
+        return _verify_bundle(directory, adapter, trusted_root, evidence_key)
+    except Exception as exc:
+        return {"valid": False, "error": f"malformed bundle: {type(exc).__name__}: {exc}"}
+
+
+def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
     """Verify an exported evidence bundle against anchors obtained outside it.
 
     A signed checkpoint over the final head and record count makes removing
@@ -163,6 +171,10 @@ def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str
         bundle = json.loads((directory / "evidence.json").read_text(encoding="utf-8"))
         public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(evidence_key))
         records = bundle["records"]
+        if not (isinstance(bundle, dict) and isinstance(records, list)
+                and all(isinstance(i, dict) and isinstance(i.get("record"), dict) for i in records)
+                and isinstance(bundle.get("implementation"), dict)):
+            raise TypeError("bundle, records, record bodies, and implementation must be JSON objects/arrays")
         verifier = adapter.verifier(trusted_root)
     except Exception as exc:  # unreadable bundle or malformed anchor: never valid
         return {"valid": False, "error": f"{type(exc).__name__}: {exc}"}
