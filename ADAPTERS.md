@@ -4,10 +4,10 @@ The AG-1 steps test requirements, not a product. An adapter lets any authorizati
 run the same ten steps: OAuth token exchange with an authorization server, a capability token
 format such as Biscuit or macaroons, a policy engine with delegation support, or Tenuo.
 
-The harness keeps the parts that must be identical across implementations: the scenario, the mock
-SCM/CI service, argument normalization, and the signed evidence records. Every result contains a
-responsibility table so those reference controls are not attributed to the adapter. The adapter
-supplies everything about the authorization artifact.
+The harness keeps the parts that must be identical across implementations: the scenario, the SCM/CI
+service (an in-memory mock or a real Forgejo), argument normalization, and the signed evidence
+records. Every result contains a responsibility table so those reference controls are not
+attributed to the adapter. The adapter supplies everything about the authorization artifact.
 
 ## Architecture declaration
 

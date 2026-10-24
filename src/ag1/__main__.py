@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import warnings
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from . import report  # noqa: E402
+from . import report, scenario  # noqa: E402
 from .adapters import ADAPTERS, load  # noqa: E402
+from .scm import MockSCM  # noqa: E402
 from .steps import STEPS, evidence_run, utility_run  # noqa: E402
 
 
@@ -18,6 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ag1", description=__doc__)
     parser.add_argument("--adapter", default="tenuo",
                         help=f"registered name ({', '.join(ADAPTERS)}) or module:Class")
+    parser.add_argument("--service", choices=("mock", "forgejo"), default="mock",
+                        help="SCM service behind the enforcement point (default: in-memory mock)")
+    parser.add_argument("--forgejo-url", default=os.environ.get("AG1_FORGEJO_URL"),
+                        help="with --service forgejo: base URL (default $AG1_FORGEJO_URL); the admin token is "
+                             "read from $AG1_FORGEJO_TOKEN. The acme/repo-a and acme/repo-b repositories are "
+                             "deleted and recreated for every world")
     parser.add_argument("--out", type=Path, default=Path("results"))
     parser.add_argument("--verify", type=Path, metavar="RESULTS_DIR",
                         help="verify an exported evidence bundle and exit")
@@ -34,10 +42,19 @@ def main(argv: list[str] | None = None) -> int:
         verification = report.verify_bundle(args.verify, adapter, args.trusted_root, args.evidence_key)
         print(f"evidence: {verification}")
         return 0 if verification["valid"] else 1
+    if args.service == "forgejo":
+        token = os.environ.get("AG1_FORGEJO_TOKEN")
+        if not (args.forgejo_url and token):
+            parser.error("--service forgejo needs --forgejo-url (or $AG1_FORGEJO_URL) and $AG1_FORGEJO_TOKEN")
+        from .forgejo import ForgejoSCM
+        scenario.use_service(lambda: ForgejoSCM(args.forgejo_url, token))
+    else:
+        scenario.use_service(MockSCM)
     results = [step(adapter) for step in STEPS]
     utility = utility_run(adapter)
     evidence_world = evidence_run(adapter)
     print(f"implementation: {adapter.name} {adapter.version}")
+    print(f"service: {evidence_world.scm.description}")
     for r in results:
         print(f"{'MET    ' if r.passed else 'NOT MET'}  {r.step_id:8} {r.title}")
         for c in r.checks:
@@ -46,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             elif not c.passed:
                 print(f"           - {c.description}: expected {c.expected}, observed {c.observed} {c.detail}")
     print(f"\nutility: {utility}")
-    report.write(results, utility, args.out, adapter, evidence_world=evidence_world)
+    report.write(results, utility, args.out, adapter, evidence_world.scm, evidence_world=evidence_world)
     print(f"wrote {args.out / 'results.md'}")
     anchors = (f"--trusted-root {evidence_world.issuer.public_id} "
                f"--evidence-key {evidence_world.gateway.evidence_public_key_hex}")

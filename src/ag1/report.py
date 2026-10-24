@@ -25,8 +25,12 @@ RESPONSIBILITIES = [
     ("Trust-domain labels (AG-1.4)", "AG-1 scenario; not carried in grants"),
     ("Enforcement immediately before execution", "AG-1 reference enforcement point"),
     ("Evidence signing and hash linking", "AG-1 reference enforcement point"),
-    ("SCM, CI/CD, and deployment behavior", "AG-1 mock service"),
 ]
+SERVICE_CONTROL = "SCM, CI/CD, and deployment behavior"
+
+
+def responsibilities(service) -> list[tuple[str, str]]:
+    return [*RESPONSIBILITIES, (SERVICE_CONTROL, service.responsibility)]
 
 
 def _observed(step: StepResult) -> str:
@@ -41,12 +45,13 @@ def _observed(step: StepResult) -> str:
     return "<br>".join(lines)
 
 
-def to_markdown(steps: list[StepResult], utility: dict, adapter) -> str:
+def to_markdown(steps: list[StepResult], utility: dict, adapter, service) -> str:
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out = [
         "# AG-1 Functional Demonstration Results",
         "",
-        f"Run {when} against {adapter.name} {adapter.version} on Python {platform.python_version()}. "
+        f"Run {when} against {adapter.name} {adapter.version} on Python {platform.python_version()}, "
+        f"with {service.description} as the SCM service. "
         f"{sum(s.passed for s in steps)} of {len(steps)} steps met their expected outcome.",
         "",
         "The result describes the implementation integrated with the AG-1 reference enforcement point. "
@@ -64,7 +69,7 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter) -> str:
         "",
         "| Control | Provider |",
         "| :- | :- |",
-        *[f"| {control} | {provider} |" for control, provider in RESPONSIBILITIES],
+        *[f"| {control} | {provider} |" for control, provider in responsibilities(service)],
         "",
         "## Functional demonstration results",
         "",
@@ -121,10 +126,10 @@ def _package_versions() -> dict[str, str]:
     return out
 
 
-HEADER_FIELDS = ("schema", "implementation", "trusted_root")
+HEADER_FIELDS = ("schema", "implementation", "service", "trusted_root")
 
 
-def _bundle_header(adapter, trusted_root: str) -> dict:
+def _bundle_header(adapter, trusted_root: str, service) -> dict:
     return {
         "schema": "ag1-evidence-v1",
         "implementation": {
@@ -132,12 +137,13 @@ def _bundle_header(adapter, trusted_root: str) -> dict:
             "version": adapter.version,
             "capabilities": dict(adapter.capabilities.__dict__),
         },
+        "service": service.description,
         "trusted_root": trusted_root,
     }
 
 
 def _write_evidence(directory: Path, world) -> None:
-    header = _bundle_header(world.adapter, world.issuer.public_id)
+    header = _bundle_header(world.adapter, world.issuer.public_id, world.scm)
     bundle = {
         **header,
         "evidence_public_key": world.gateway.evidence_public_key_hex,
@@ -216,7 +222,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         public_key.verify(bytes.fromhex(signed["signature"]), record_payload(body))
         checkpoint_valid = (body.get("type") == "ag1-evidence-checkpoint"
                             and body.get("records") == count and body.get("terminal_hash") == terminal_hash
-                            and body.get("header") == {k: bundle.get(k) for k in HEADER_FIELDS})
+                            and body.get("header") == {k: bundle[k] for k in HEADER_FIELDS if k in bundle})
     except (KeyError, ValueError, TypeError, AttributeError, InvalidSignature):
         pass
     chained = sum(1 for item in records
@@ -235,14 +241,16 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
     }
 
 
-def write(steps: list[StepResult], utility: dict, directory: Path, adapter, evidence_world=None) -> None:
+def write(steps: list[StepResult], utility: dict, directory: Path, adapter, service,
+          evidence_world=None) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "results.md").write_text(to_markdown(steps, utility, adapter), encoding="utf-8")
+    (directory / "results.md").write_text(to_markdown(steps, utility, adapter, service), encoding="utf-8")
     data = {
         "implementation": {"name": adapter.name, "version": adapter.version},
+        "service": service.description,
         "adapter_capabilities": adapter.capabilities.__dict__,
         "control_responsibility": [
-            {"control": control, "provider": provider} for control, provider in RESPONSIBILITIES
+            {"control": control, "provider": provider} for control, provider in responsibilities(service)
         ],
         "steps": [
             {
@@ -265,6 +273,7 @@ def write(steps: list[StepResult], utility: dict, directory: Path, adapter, evid
         "harness_commit": _git_commit(),
         "python": platform.python_version(),
         "platform": platform.platform(),
+        "service": service.description,
         "packages": _package_versions(),
         "note": "Latency values are local harness processing measurements, not network or human approval latency.",
     }

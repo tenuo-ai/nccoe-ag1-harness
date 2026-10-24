@@ -71,10 +71,10 @@ can do inside those bounds.
                      │ 4. append a signed, hash-linked evidence record                      │
                      └───────────────────────────────────┬──────────────────────────────────┘
                                                          ▼
-                                   mock SCM and CI/CD service (holds an admin credential)
+                    SCM and CI/CD service (holds an admin credential): a real Forgejo, or an in-memory mock
 ```
 
-A developer asks an orchestrator agent to fix `CVE-2026-1234` in `org/repo-a`. The task grant allows
+A developer asks an orchestrator agent to fix `CVE-2026-1234` in `acme/repo-a`. The task grant allows
 reading that repository, writing only to branch `fix/cve-2026-1234` under `/src/parser`, running the
 `unit` and `parser` test suites, and opening a pull request into `main`. Deployment is a separate
 task with its own grant that also needs a release manager's signed approval.
@@ -92,8 +92,16 @@ The agents are scripted; no model is involved. Each step assumes prompt injectio
 agent does what it is told, and then checks what the enforcement point allows. That is the property
 that matters: an authorization control has to hold even when the agent is fully compromised.
 
-The mock service holds a broad admin credential of its own. If a step passes, the service acted on
-the authority the agent presented, not on its own.
+The service holds a broad admin credential of its own. If a step passes, the service acted on the
+authority the agent presented, not on its own.
+
+The service is either an in-memory mock or a real [Forgejo](https://forgejo.org/) instance
+(`--service forgejo`). With Forgejo, the enforcement point calls the forge's API with an admin token,
+and that service account is on the push allowlist of the protected `main` branch, as bot accounts
+usually are. Normalization asks the forge: repository names, the default branch behind `HEAD`, and
+symbolic links are resolved from the repository itself. After every write the file is read back at
+the canonical path. Every world deletes and recreates the seed repositories, so steps start from
+the same state. Test runs and deployments are still recorded by the harness in this mode.
 
 ### What the implementation supplies
 
@@ -107,7 +115,7 @@ The report does not attribute controls supplied by the harness to the adapter un
 | Trust-domain labels (AG-1.4) | AG-1 scenario; not carried in grants |
 | Enforcement immediately before execution | AG-1 reference enforcement point |
 | Evidence signing and hash linking | AG-1 reference enforcement point |
-| SCM, CI/CD, and deployment behavior | AG-1 mock service |
+| SCM, CI/CD, and deployment behavior | AG-1 mock service, or Forgejo for repositories and pull requests (test runs and deployments recorded by the harness) |
 
 Each adapter declares its delegation, verification, and artifact modes. This allows an
 authorization-server-mediated OAuth design to describe itself differently from a holder-signed,
@@ -157,6 +165,17 @@ python -m venv .venv
 .venv/bin/python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 ```
 
+To run against a real Forgejo (needs Docker and git):
+
+```bash
+eval "$(scripts/forgejo-up.sh)"    # starts Forgejo 16.0.6, sets AG1_FORGEJO_URL and AG1_FORGEJO_TOKEN
+.venv/bin/pytest -q tests/test_forgejo.py
+.venv/bin/python -m ag1 --service forgejo --out results-forgejo
+```
+
+The run deletes and recreates `acme/repo-a` and `acme/repo-b` on that instance, so point it only at
+a throwaway forge.
+
 `results/results.md` uses the column layout of NCCoE's functional demonstration results (Demo ID,
 Expected Outcome, Observed Outcome, Comments) and adds an explicit result column.
 `results/results.json` has the same data. A run also exports:
@@ -205,6 +224,13 @@ These came from attacking the harness, not from the ten steps as first written.
   backslashes were initially accepted as ordinary file names. They are harmless on this mock and on
   POSIX, but some platforms and normalizations turn them into separators. The enforcement point now
   refuses them instead of guessing how a downstream tool will read them.
+- **The forge resolves paths itself.** Given `src/parser/../../.github/workflows/release.yml`, Forgejo
+  writes `.github/workflows/release.yml`, and with the admin token it does so on protected `main`.
+  Its API refuses reads and writes through the `src/parser/ci` symbolic link, but a git checkout of
+  the branch, as a build or test runner makes, follows it. A policy checked on the string the agent sent would therefore approve a different file from the
+  one the forge changes. The enforcement point checks and forwards the canonical form, and repository
+  names the forge might rewrite (a `.git` suffix, look-alike characters) are refused rather than
+  resolved.
 - **Evidence deletion.** Signed records alone do not reveal a missing record. Records are now
   hash-linked, so a deletion or reordering breaks the chain, and a signed checkpoint over the record
   count and latest hash, checked against the evidence key held outside the bundle, catches deleted
@@ -226,10 +252,9 @@ will ship in the next release. The pin moves when it does.
 
 ## Limits
 
-- The agents are scripted and the services are mocks; the harness tests the authorization layer, not
-  model behavior or a real SCM.
-- The mock service executes the normalized arguments. A real gateway must forward the normalized
-  form too, or the tool and the policy can disagree about what was requested.
+- The agents are scripted; the harness tests the authorization layer, not model behavior.
+- With `--service forgejo` the repositories and pull requests are real; test runs and deployments
+  are still recorded by the harness, and the enforcement points run in one process.
 - Normalization, the reference enforcement point, and evidence signing are harness components, not
   claims about the adapter. Every report identifies this responsibility split.
 - Revocation is installed at one enforcement point; distribution to many is not tested.

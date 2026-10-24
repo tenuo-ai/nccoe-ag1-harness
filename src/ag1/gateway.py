@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from .adapters.base import Adapter, Principal
-from .scm import MockSCM
+from .scm import Service, ServiceError
 from .spec import Denied
 
 
@@ -104,7 +104,7 @@ def parse_argv(argv: str) -> dict:
 class EnforcementPoint:
     adapter: Adapter
     trusted_root: Principal
-    scm: MockSCM
+    scm: Service
     audience: str | None = None
     trust_domain: str = "service-domain"
     trusted_origin_principals: set[str] | None = None
@@ -158,10 +158,10 @@ class EnforcementPoint:
             if ref_key in out:
                 out[ref_key] = self.scm.resolve_ref(repo, out[ref_key])
         if "path" in out:
-            out["path"] = self._canonical_path(repo, out["path"])
+            out["path"] = self._canonical_path(repo, out["path"], out.get("branch"))
         return out
 
-    def _canonical_path(self, repo: str, path) -> str:
+    def _canonical_path(self, repo: str, path, ref: str | None = None) -> str:
         # Refuse anything ambiguous rather than guess how a downstream tool will read it.
         if not isinstance(path, str):
             raise NormalizationError(f"path must be a string, not {type(path).__name__}")
@@ -193,12 +193,12 @@ class EnforcementPoint:
         if not decoded.startswith("/"):
             decoded = "/" + decoded
         canonical = posixpath.normpath(decoded)
-        return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical))
+        return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
         try:
             canonical = self.normalize(req.tool, req.args)
-        except NormalizationError as exc:
+        except (NormalizationError, ServiceError) as exc:
             decision = Decision(False, f"NormalizationError: {exc}", {})
             self._record(req, decision)
             return decision
