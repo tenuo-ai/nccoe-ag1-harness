@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from cryptography.exceptions import InvalidSignature
 
 from .adapters.base import Adapter
-from .gateway import GENESIS, EnforcementPoint, Request, record_payload
+from .gateway import GENESIS, Request, record_payload
 from .scenario import (
     ARTIFACT,
     ARTIFACT_NEXT,
@@ -26,6 +26,7 @@ from .scenario import (
     OTHER_REPO,
     REPO,
     SCM_AUDIENCE,
+    TASK_ID,
     TEST_AUDIENCE,
     TEST_DOMAIN,
     Agent,
@@ -34,9 +35,11 @@ from .scenario import (
     test_caps,
     write_caps,
 )
+from .scm import LEXER_FIXED
 from .spec import DelegationRejected, Exact, Under
 
 WRITE_OK = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.c", "content": "/* fixed */"}
+PATCH = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.py", "content": LEXER_FIXED}
 
 
 @dataclass
@@ -251,25 +254,14 @@ def ag1_04(adapter=None) -> StepResult:
         cross_patch, pk, remote_runner, cross_caps, ttl=300, terminal=True,
     )
     remote = w.agent(remote_runner, [cross_root, cross_patch, remote_grant])
-    receiving = EnforcementPoint(
-        adapter=a,
-        trusted_root=w.issuer,
-        scm=w.scm,
-        audience=TEST_AUDIENCE,
-        trust_domain=TEST_DOMAIN,
-        trusted_origin_principals={w.orchestrator.principal.public_id},
-    )
+    receiving = w.receiving
     remote_args = {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser", "audience": TEST_AUDIENCE}
     r.decision("receiving enforcement point accepts the narrower child from another trust domain",
                receiving.handle(remote.request("test.run", remote_args)), True)
     r.decision("same chain names the wrong intended audience",
                receiving.handle(remote.request("test.run", {**remote_args, "audience": SCM_AUDIENCE},
                                               intent="attack")), False)
-    other_service = EnforcementPoint(
-        adapter=a, trusted_root=w.issuer, scm=w.scm, audience=SCM_AUDIENCE,
-        trust_domain=DEVELOPMENT_DOMAIN,
-        trusted_origin_principals={w.orchestrator.principal.public_id},
-    )
+    other_service = w.other_service
     r.decision("grant for the test service is presented to a different service",
                other_service.handle(remote.request("test.run", remote_args, intent="attack")), False)
     # The request names the other service's audience, so that service's own
@@ -298,13 +290,16 @@ def ag1_04(adapter=None) -> StepResult:
     alien = w.agent(alien_runner, [alien_root, alien_child])
     r.decision("correct audience and origin but chain begins at an untrusted issuer",
                receiving.handle(alien.request("test.run", remote_args, intent="attack")), False)
+    boundary = ("The trust boundary is simulated: a second enforcement point with its own configuration in the same "
+                "process" if w.deployment == "in-process" else
+                "Each enforcement point is a separate service with its own configuration, and each agent's key "
+                "stays in its own container")
     r.comments = ("Widening tools and constraints, and delegating past a terminal grant, must be rejected. A longer "
                   "requested lifetime may be rejected or clamped, as long as the child never outlives its parent. "
-                  "The trust boundary is simulated: a second enforcement point with its own configuration in the "
-                  "same process, and trust domains are scenario labels, not grant contents. The adapter supplies "
-                  "chain verification against the trusted issuer and the audience constraint inside the grant; the "
-                  "AG-1 reference enforcement point supplies the comparison with its own audience and the "
-                  "originating-principal allowlist.")
+                  f"{boundary}; trust domains are "
+                  "deployment labels, not grant contents. The adapter supplies chain verification against the "
+                  "trusted issuer and the audience constraint inside the grant; the AG-1 reference enforcement "
+                  "point supplies the comparison with its own audience and the originating-principal allowlist.")
     return r
 
 
@@ -385,9 +380,7 @@ def ag1_07(adapter=None) -> StepResult:
     reader = a.delegate(w.task_grant, w.orchestrator.principal, reader_p, {"repo.read": {"repo": Exact(REPO)}}, ttl=600)
     reader_agent = w.agent(reader_p, [w.task_grant, reader])
 
-    t0 = time.perf_counter()
-    w.gateway.verifier.install_revocation(w.issuer, [patch])
-    propagation_ms = (time.perf_counter() - t0) * 1000
+    propagation = w.revoke([patch])
     r.decision("revoked patch agent grant", w.call(w.patch_agent, "repo.write", WRITE_OK, intent="attack"), False)
     r.decision("test runner below the revoked grant",
                w.call(w.test_runner, "test.run", {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser"},
@@ -395,19 +388,26 @@ def ag1_07(adapter=None) -> StepResult:
     r.decision("concurrent task under the same orchestrator",
                w.gateway.handle(reader_agent.request("repo.read", {"repo": REPO})), True)
     r.decision("orchestrator's own task grant", w.call(w.orchestrator, "repo.read", {"repo": REPO}), True)
-    r.comments = (f"Revocation took effect on the next call ({propagation_ms:.1f} ms to install at the enforcement "
-                  f"point). Revoking a grant also revokes everything delegated from it. Distribution to remote "
-                  f"enforcement points is outside this harness.")
+    reach = (f"installed at {propagation['enforcement_points']} enforcement points in this process"
+             if w.deployment == "in-process" else
+             f"signed by the issuer and pushed to {propagation['enforcement_points']} separately deployed "
+             "enforcement points")
+    r.comments = (f"Revocation took effect on the next call ({propagation['ms']:.1f} ms; {reach}). Revoking a grant "
+                  "also revokes everything delegated from it.")
     return r
 
 
-def verify_evidence(gateway: EnforcementPoint, adapter: Adapter, issuer) -> list[dict]:
-    """Auditor side: check each record's signature and link, and re-verify its chain offline."""
-    pub = gateway.evidence_public_key
-    verifier = adapter.verifier(issuer)
+def verify_evidence(records: list[dict], public_key, adapter: Adapter, issuer) -> list[dict]:
+    """Auditor side: check each record's signature and link, and re-verify its chain offline.
+
+    `records` is a gateway's whole log, from the first record, and `public_key` that
+    gateway's evidence key.
+    """
+    pub = public_key
+    verifier = adapter.verifier(issuer.public_id if hasattr(issuer, "public_id") else issuer)
     out = []
     expected_prev = GENESIS
-    for item in gateway.evidence:
+    for item in records:
         body = item["record"]
         payload = record_payload(body)
         signature = bytes.fromhex(item["signature"])
@@ -441,6 +441,16 @@ def evidence_run(adapter=None):
     approval = a.approve(w.release_approver, ra.chain[-1], ra.principal,
                          "deploy.staging", {"artifact": ARTIFACT})
     w.call(ra, "deploy.staging", {"artifact": ARTIFACT}, approvals=[approval])
+    # The same orchestrator's authority, used across the trust boundary and recorded by the
+    # receiving enforcement point in its own log.
+    caps = {"test.run": cross_domain_test_caps()}
+    root = a.issue(w.issuer, w.orchestrator.principal, caps, ttl=900, task=TASK_ID)
+    hop = a.delegate(root, w.orchestrator.principal, w.patch_agent.principal, caps, ttl=600)
+    runner_p = a.new_principal("remote-test-runner", TEST_DOMAIN)
+    runner = w.agent(runner_p, [root, hop, a.delegate(hop, w.patch_agent.principal, runner_p, caps, ttl=300,
+                                                      terminal=True)])
+    w.call(runner, "test.run", {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser", "audience": TEST_AUDIENCE},
+           gateway=w.receiving)
     return w
 
 
@@ -450,8 +460,11 @@ def ag1_08(adapter=None) -> StepResult:
                    "approvals, and action outcomes.")
     w = evidence_run(adapter)
     a = w.adapter
+    log = list(w.gateway.evidence)
+    start = w.evidence_start.get(w.gateway.name, 0)
+    key = w.gateway.evidence_public_key
 
-    audited = verify_evidence(w.gateway, a, w.issuer)
+    audited = verify_evidence(log, key, a, w.issuer)[start:]
     r.fact("every record's signature verifies", "all valid",
            f"{sum(x['signature_valid'] for x in audited)}/{len(audited)} valid",
            all(x["signature_valid"] for x in audited))
@@ -460,11 +473,29 @@ def ag1_08(adapter=None) -> StepResult:
            all(x["chain"] is True for x in audited))
     names = {p.public_id: p.name for p in (w.issuer, w.orchestrator.principal, w.patch_agent.principal,
                                           w.test_runner.principal, w.release_approver)}
+
+    def path(record):
+        return " -> ".join(f"{names.get(l['issuer'], '?')}>{names.get(l['holder'], '?')}"
+                           for l in record["delegation_lineage"])
+
     test_run = audited[2]["record"]
-    path = " -> ".join(f"{names.get(l['issuer'], '?')}>{names.get(l['holder'], '?')}"
-                       for l in test_run["delegation_lineage"])
     expected_path = "task-authorization-system>orchestrator -> orchestrator>patch-agent -> patch-agent>test-runner"
-    r.fact("delegation path reconstructed for the test run", expected_path, path, path == expected_path)
+    r.fact("delegation path reconstructed for the test run", expected_path, path(test_run),
+           path(test_run) == expected_path)
+    # A second enforcement point's log, verified with that enforcement point's own key.
+    other_log = list(w.receiving.evidence)
+    other = verify_evidence(other_log, w.receiving.evidence_public_key, a, w.issuer)
+    remote = other[-1] if other else None
+    if remote:
+        names[remote["record"]["presenter"]] = "remote-test-runner"
+    remote_ok = bool(remote) and remote["signature_valid"] and all(x["linked"] for x in other) \
+        and remote["chain"] is True and remote["record"]["originating_principal"] == w.orchestrator.principal.public_id
+    expected_remote = "task-authorization-system>orchestrator -> orchestrator>patch-agent -> " \
+                      "patch-agent>remote-test-runner"
+    r.fact("cross-domain test run, from the receiving enforcement point's own log, traces to the same orchestrator",
+           expected_remote, path(remote["record"]) if remote else "no record",
+           remote_ok and path(remote["record"]) == expected_remote,
+           f"{w.receiving.name}: signature and links verified with its own evidence key")
     denied = audited[1]["record"]
     r.fact("denied call is recorded with its reason", "denied with reason",
            f"{denied['decision']} ({denied['reason'].split(':')[0]})", denied["decision"] == "denied")
@@ -479,18 +510,15 @@ def ag1_08(adapter=None) -> StepResult:
            f"expires {approvals[0].get('expires_at') if approvals else '-'}", ok)
     r.fact("records form an unbroken hash chain", "all linked",
            f"{sum(x['linked'] for x in audited)}/{len(audited)} linked", all(x["linked"] for x in audited))
-    original = list(w.gateway.evidence)
-    edited = json.loads(json.dumps(original[1]))
+    edited = json.loads(json.dumps(log[start + 1]))
     edited["record"]["decision"] = "allowed"
-    w.gateway.evidence[:] = original[:1] + [edited] + original[2:]
-    caught = not verify_evidence(w.gateway, a, w.issuer)[1]["signature_valid"]
+    tampered = log[:start + 1] + [edited] + log[start + 2:]
+    caught = not verify_evidence(tampered, key, a, w.issuer)[start + 1]["signature_valid"]
     r.fact("a record edited after the fact (denied -> allowed) is detected", "detected",
            "detected" if caught else "not detected", caught)
-    w.gateway.evidence[:] = original[:1] + original[2:]
-    gap = not all(x["linked"] for x in verify_evidence(w.gateway, a, w.issuer))
+    gap = not all(x["linked"] for x in verify_evidence(log[:start + 1] + log[start + 2:], key, a, w.issuer))
     r.fact("a record deleted from the middle of the log is detected", "detected",
            "detected" if gap else "not detected", gap)
-    w.gateway.evidence[:] = original
     r.comments = ("Records carry the presented chain, so an auditor needs only the root key and the enforcement "
                   "point's evidence key, not the logging system's word. Each record includes the hash of the one "
                   "before it; deleting the newest records is only detectable if the latest hash is anchored "
@@ -586,13 +614,11 @@ def ag1_10(adapter=None) -> StepResult:
     workflow = w.scm.file(REPO, "main", "/.github/workflows/release.yml")
     r.fact("release workflow on main unchanged", "name: release", workflow, workflow == "name: release")
 
-    baseline = build_world(w.adapter)
-    baseline.gateway.enforce = False
-    b = baseline.call(baseline.patch_agent, "repo.write", args, intent="attack")
+    b = w.call(w.patch_agent, "repo.write", args, gateway=w.baseline, intent="attack")
     r.fact("baseline: same request to a service acting on its own credential", "for comparison",
            "executed" if b.allowed else "denied", True, "shows what task authority prevents")
-    r.comments = ("The baseline uses the identical request with enforcement turned off: the service's own "
-                  "admin credential would have rewritten the release workflow.")
+    r.comments = ("The baseline sends the identical request to an enforcement point with enforcement turned off: "
+                  "the service's own admin credential rewrites the release workflow.")
     return r
 
 
@@ -606,9 +632,8 @@ def utility_run(adapter=None) -> dict:
     t0 = time.perf_counter()
     base = {"repo": REPO, "branch": FIX_BRANCH}
     w.call(w.orchestrator, "repo.read", {"repo": REPO})
-    w.call(w.patch_agent, "repo.write", WRITE_OK)
-    w.call(w.test_runner, "test.run", {**base, "suite": "unit"})
-    w.call(w.test_runner, "test.run", {**base, "suite": "parser"})
+    w.call(w.patch_agent, "repo.write", PATCH)
+    tests = [w.call(w.test_runner, "test.run", {**base, "suite": suite}) for suite in ("unit", "parser")]
     # The test runner also needs the integration suite, which its grant does not include.
     first = w.call(w.test_runner, "test.run", {**base, "suite": "integration"}, intent="step-up")
     s0 = time.perf_counter()
@@ -621,11 +646,12 @@ def utility_run(adapter=None) -> dict:
     new_runner = w.delegate_runner(new_patch, runner_p, suites=("integration",))
     runner = w.agent(runner_p, [new_task, new_patch, new_runner])
     stepped = w.gateway.handle(runner.request("test.run", {**base, "suite": "integration"}))
+    tests.append(stepped)
     step_up_ms = (time.perf_counter() - s0) * 1000
     w.call(w.patch_agent, "pr.create", {"repo": REPO, "head": FIX_BRANCH, "base": "main"})
     total_ms = (time.perf_counter() - t0) * 1000
 
-    records = [e["record"] for e in w.gateway.evidence]
+    records = [e["record"] for e in w.records()]
     legit = [x for x in records if x["intent"] == "legit"]
     mistaken = [x for x in legit if x["decision"] == "denied"]
     tasks = {"read repository": True, "write patch": True, "run unit and parser tests": True,
@@ -640,4 +666,5 @@ def utility_run(adapter=None) -> dict:
         "mistaken_denials": len(mistaken),
         "authorized_calls": len(legit),
         "total_ms": round(total_ms, 1),
+        "test_results": "; ".join(d.result or d.reason for d in tests),
     }

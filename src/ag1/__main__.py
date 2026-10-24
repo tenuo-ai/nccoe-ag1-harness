@@ -20,8 +20,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ag1", description=__doc__)
     parser.add_argument("--adapter", default="tenuo",
                         help=f"registered name ({', '.join(ADAPTERS)}) or module:Class")
+    parser.add_argument("--mode", choices=("in-process", "compose"), default="in-process",
+                        help="in-process (default), or compose: every party and enforcement point a separate "
+                             "service, configured by the AG1_* variables compose.yaml sets for the driver")
     parser.add_argument("--service", choices=("mock", "forgejo"), default="mock",
-                        help="SCM service behind the enforcement point (default: in-memory mock)")
+                        help="in-process: SCM service behind the enforcement point (default: in-memory mock)")
     parser.add_argument("--forgejo-url", default=os.environ.get("AG1_FORGEJO_URL"),
                         help="with --service forgejo: base URL (default $AG1_FORGEJO_URL); the admin token is "
                              "read from $AG1_FORGEJO_TOKEN. The acme/repo-a and acme/repo-b repositories are "
@@ -31,17 +34,26 @@ def main(argv: list[str] | None = None) -> int:
                         help="verify an exported evidence bundle and exit")
     parser.add_argument("--trusted-root", metavar="HEX",
                         help="with --verify: the trusted root public key, obtained outside the bundle")
-    parser.add_argument("--evidence-key", metavar="HEX",
-                        help="with --verify: the evidence signing public key, obtained outside the bundle")
+    parser.add_argument("--evidence-key", metavar="[NAME=]HEX", action="append",
+                        help="with --verify: an evidence signing public key, obtained outside the bundle; for a "
+                             "compose run, one NAME=HEX per enforcement point")
     args = parser.parse_args(argv)
 
     adapter = load(args.adapter)
     if args.verify is not None:
         if not (args.trusted_root and args.evidence_key):
             parser.error("--verify needs --trusted-root and --evidence-key from a source other than the bundle")
-        verification = report.verify_bundle(args.verify, adapter, args.trusted_root, args.evidence_key)
+        if len(args.evidence_key) == 1 and "=" not in args.evidence_key[0]:
+            verification = report.verify_bundle(args.verify, adapter, args.trusted_root, args.evidence_key[0])
+        else:
+            keys = dict(k.split("=", 1) for k in args.evidence_key)
+            verification = report.verify_bundles(args.verify, adapter, args.trusted_root, keys)
         print(f"evidence: {verification}")
         return 0 if verification["valid"] else 1
+    if args.mode == "compose":
+        scenario.use_deployment(_compose_deployment())
+    else:
+        scenario.use_deployment(None)
     if args.service == "forgejo":
         token = os.environ.get("AG1_FORGEJO_TOKEN")
         if not (args.forgejo_url and token):
@@ -63,14 +75,36 @@ def main(argv: list[str] | None = None) -> int:
             elif not c.passed:
                 print(f"           - {c.description}: expected {c.expected}, observed {c.observed} {c.detail}")
     print(f"\nutility: {utility}")
-    report.write(results, utility, args.out, adapter, evidence_world.scm, evidence_world=evidence_world)
+    if args.mode == "compose":
+        # Each enforcement point exports its own log and signs its own checkpoint.
+        report.write(results, utility, args.out, adapter, evidence_world.scm)
+        report.write_bundles(args.out, {g.name: g.bundle() for g in evidence_world.gateways})
+        keys = " ".join(f"--evidence-key {g.name}={g.evidence_public_key_hex}" for g in evidence_world.gateways)
+    else:
+        report.write(results, utility, args.out, adapter, evidence_world.scm, evidence_world=evidence_world)
+        keys = f"--evidence-key {evidence_world.gateway.evidence_public_key_hex}"
     print(f"wrote {args.out / 'results.md'}")
-    anchors = (f"--trusted-root {evidence_world.issuer.public_id} "
-               f"--evidence-key {evidence_world.gateway.evidence_public_key_hex}")
+    anchors = f"--trusted-root {evidence_world.issuer.public_id} {keys}"
     print("record these anchors outside the results directory; the bundle cannot vouch for itself")
     print(f"anchors: {anchors}")
     print(f"verify with: {parser.prog} --adapter {args.adapter} --verify {args.out} {anchors}")
     return 0 if all(r.passed for r in results) and utility["mistaken_denials"] == 0 else 1
+
+
+def _compose_deployment():
+    from .compose.driver import ComposeConfig, deployment
+    from .compose.__main__ import _pairs
+    from .forgejo import ForgejoSCM
+
+    env = os.environ
+    url = env["AG1_FORGEJO_URL"]
+    with open(env["AG1_FORGEJO_TOKEN_FILE"], encoding="utf-8") as f:
+        token = f.read().strip()
+    return deployment(ComposeConfig(
+        keyholders=_pairs(env["AG1_KEYHOLDERS"]), peps=_pairs(env["AG1_PEPS"]),
+        test_url=env["AG1_TEST_SERVICE_URL"], sink_url=env["AG1_SINK_URL"],
+        forge=lambda: ForgejoSCM(url, token),
+    ))
 
 
 if __name__ == "__main__":

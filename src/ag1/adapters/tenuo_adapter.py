@@ -11,6 +11,7 @@ import tenuo
 from tenuo import (
     Authorizer,
     NonceStore,
+    SignedApproval,
     SignedRevocationList,
     SigningKey,
     PublicKey,
@@ -31,8 +32,25 @@ class TenuoPrincipal:
     trust_domain: str = "local"
 
     @property
+    def public_key(self) -> PublicKey:
+        return self.key.public_key
+
+    @property
     def public_id(self) -> str:
         return self.key.public_key.to_bytes().hex()
+
+
+@dataclass
+class TenuoPublicPrincipal:
+    """A party known only by its public key, as another service sees it."""
+
+    name: str
+    public_key: PublicKey
+    trust_domain: str = "local"
+
+    @property
+    def public_id(self) -> str:
+        return self.public_key.to_bytes().hex()
 
 
 def _constraint(c: spec.Constraint):
@@ -71,7 +89,7 @@ class TenuoVerifier:
 
     def __init__(self, root: TenuoPrincipal | str) -> None:
         public_key = (PublicKey.from_bytes(bytes.fromhex(root))
-                      if isinstance(root, str) else root.key.public_key)
+                      if isinstance(root, str) else root.public_key)
         self._authorizer = Authorizer(trusted_roots=[public_key])
         self._authorizer.set_clock_tolerance(CLOCK_TOLERANCE_SECS)
         self._nonces = NonceStore(ttl_seconds=self._authorizer.pop_validity_secs() + CLOCK_TOLERANCE_SECS)
@@ -101,10 +119,18 @@ class TenuoVerifier:
 
     def install_revocation(self, issuer: TenuoPrincipal, grants):
         self._revocation_version += 1
-        builder = SignedRevocationList.builder()
-        for g in grants:
-            builder = builder.revoke(g.id)
-        self._authorizer.set_revocation_list(builder.version(self._revocation_version).build(issuer.key))
+        self.apply_revocation(_revocation_list(issuer, grants, self._revocation_version))
+
+    def apply_revocation(self, data: bytes) -> None:
+        self._authorizer.set_revocation_list(SignedRevocationList.from_bytes(data))
+
+
+def _revocation_list(issuer: TenuoPrincipal, grants, version: int) -> bytes:
+    builder = SignedRevocationList.builder()
+    for g in grants:
+        builder = builder.revoke(g.id)
+    return bytes(builder.version(version).build(issuer.key).to_bytes())
+
 
 
 class TenuoAdapter:
@@ -128,16 +154,16 @@ class TenuoAdapter:
         b = _apply(Warrant.mint_builder(), caps)
         if gate is not None:
             b = (b.approval_gates({t: None for t in gate.tools})
-                 .required_approvers([p.key.public_key for p in gate.approvers])
+                 .required_approvers([p.public_key for p in gate.approvers])
                  .min_approvals(gate.threshold))
-        b = b.holder(holder.key.public_key).ttl(ttl)
+        b = b.holder(holder.public_key).ttl(ttl)
         if task:
             b = b.session_id(task)
         return b.mint(issuer.key)
 
     def delegate(self, parent, parent_holder, child, caps, ttl, terminal=False):
         try:
-            b = _apply(parent.grant_builder(), caps).holder(child.key.public_key).ttl(ttl)
+            b = _apply(parent.grant_builder(), caps).holder(child.public_key).ttl(ttl)
             if terminal:
                 b = b.terminal()
             return b.grant(parent_holder.key)
@@ -148,12 +174,35 @@ class TenuoAdapter:
         return bytes(chain[-1].sign(holder.key, tool, args, int(time.time())))
 
     def approve(self, approver, grant, holder, tool, args, ttl: int | None = None):
-        request_hash = compute_request_hash(grant.id, tool, args, holder.key.public_key)
+        request_hash = compute_request_hash(grant.id, tool, args, holder.public_key)
         request = ApprovalRequest(tool=tool, arguments=args, warrant_id=grant.id, request_hash=request_hash)
         return sign_approval(request, approver.key, external_id=f"{approver.name}@example.org", ttl_seconds=ttl)
 
     def verifier(self, trusted_root):
         return TenuoVerifier(trusted_root)
+
+    # Remote operation: parties in other services are known only by public key, and
+    # proofs, approvals and revocation lists cross the network as bytes.
+
+    def public_principal(self, name: str, public_id: str, trust_domain: str = "local") -> TenuoPublicPrincipal:
+        self._trust_domains.setdefault(public_id, trust_domain)
+        return TenuoPublicPrincipal(name, PublicKey.from_bytes(bytes.fromhex(public_id)), trust_domain)
+
+    def proof_to_bytes(self, proof) -> bytes:
+        return bytes(proof)
+
+    def proof_from_bytes(self, data: bytes):
+        return data
+
+    def approval_to_bytes(self, approval) -> bytes:
+        return bytes(approval.to_bytes())
+
+    def approval_from_bytes(self, data: bytes):
+        return SignedApproval.from_bytes(data)
+
+    def revocation(self, issuer, grants, version: int) -> bytes:
+        """A revocation list signed by `issuer`, for `verifier(...).apply_revocation`."""
+        return _revocation_list(issuer, grants, version)
 
     def info(self, grant) -> spec.GrantInfo:
         return spec.GrantInfo(

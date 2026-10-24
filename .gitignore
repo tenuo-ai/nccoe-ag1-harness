@@ -6,3 +6,5 @@ results/
 *.pem
 build/
 *.egg-info/
+.compose-secrets/
+results-compose/

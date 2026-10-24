@@ -9,8 +9,9 @@ behind `HEAD`, and symbolic links are resolved from the repository, not from
 a copy of the seed. After every write the file is read back at the canonical
 path, so a forge that stored it somewhere else would be noticed.
 
-Each `ForgejoSCM` deletes and recreates the seed repositories, so every world
-starts from the same state. Test runs and deployments are recorded by the
+Each `ForgejoSCM` deletes and recreates the seed repositories (unless built with
+`reset=False`, as an enforcement point in compose mode is), so every world starts
+from the same state. Test runs and deployments are recorded by the
 harness in this mode.
 """
 
@@ -36,7 +37,7 @@ MAX_SYMLINK_HOPS = 8
 
 
 class ForgejoSCM:
-    def __init__(self, url: str, token: str) -> None:
+    def __init__(self, url: str, token: str, reset: bool = True) -> None:
         self.url = url.rstrip("/")
         self._token = token
         self.version = self._api("GET", "/version")["version"]
@@ -46,7 +47,8 @@ class ForgejoSCM:
         self.service_user = self._api("GET", "/user")["login"]
         self.deployments: list[dict] = []
         self.test_runs: list[dict] = []
-        self._reset()
+        if reset:
+            self._reset()
 
     # HTTP
 

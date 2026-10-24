@@ -17,20 +17,68 @@ import posixpath
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+# A small lexer with the CVE: an unterminated string literal reads past the end of
+# the input. The parser suite fails until the patch agent writes LEXER_FIXED.
+LEXER = '''class LexError(ValueError):
+    pass
+
+
+def tokenize(text):
+    tokens, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch.isspace():
+            i += 1
+        elif ch == '"':
+            j = i + 1
+            while text[j] != '"':
+                j += 1
+            tokens.append(("string", text[i + 1:j]))
+            i = j + 1
+        elif ch.isalnum():
+            j = i
+            while j < len(text) and text[j].isalnum():
+                j += 1
+            tokens.append(("word", text[i:j]))
+            i = j
+        else:
+            tokens.append(("symbol", ch))
+            i += 1
+    return tokens
+'''
+LEXER_FIXED = LEXER.replace(
+    "            while text[j] != '\"':\n                j += 1\n",
+    "            while j < len(text) and text[j] != '\"':\n                j += 1\n"
+    "            if j == len(text):\n                raise LexError(\"unterminated string\")\n",
+)
+REPO_FILES = {
+    "/src/parser/lexer.c": "/* vulnerable lexer */",
+    "/src/parser/lexer.py": LEXER,
+    "/src/__init__.py": "",
+    "/src/parser/__init__.py": "",
+    "/conftest.py": "",
+    "/tests/unit/test_words.py": (
+        "from src.parser.lexer import tokenize\n\n\n"
+        "def test_words():\n    assert tokenize(\"let x\") == [(\"word\", \"let\"), (\"word\", \"x\")]\n"),
+    "/tests/parser/test_strings.py": (
+        "import pytest\n\nfrom src.parser.lexer import LexError, tokenize\n\n\n"
+        "def test_string():\n    assert tokenize('\"a b\"') == [(\"string\", \"a b\")]\n\n\n"
+        "def test_unterminated_string_is_an_error():\n    with pytest.raises(LexError):\n"
+        "        tokenize('\"never closed')\n"),
+    "/tests/integration/test_mixed.py": (
+        "from src.parser.lexer import tokenize\n\n\n"
+        "def test_mixed():\n    assert [k for k, _ in tokenize('say \"hi\";')] == [\"word\", \"string\", \"symbol\"]\n"),
+    "/.github/workflows/release.yml": "name: release",
+}
+
 # Starting state: repository -> default branch, branch -> path -> content, and
 # symbolic links (link path -> target relative to the link's directory, as git stores it).
 SEED: dict = {
     "acme/repo-a": {
         "default_branch": "main",
         "branches": {
-            "main": {
-                "/src/parser/lexer.c": "/* vulnerable lexer */",
-                "/.github/workflows/release.yml": "name: release",
-            },
-            "fix/cve-2026-1234": {
-                "/src/parser/lexer.c": "/* vulnerable lexer */",
-                "/.github/workflows/release.yml": "name: release",
-            },
+            "main": dict(REPO_FILES),
+            "fix/cve-2026-1234": dict(REPO_FILES),
         },
         "symlinks": {"/src/parser/ci": "../../.github/workflows"},
     },
