@@ -192,31 +192,37 @@ These came from attacking the harness, not from the ten steps as first written.
 
 - **Exact replay.** Proof of possession binds a request to the holder's key, the tool and the
   arguments, but an identical request resent inside the proof's validity window still verifies.
-  Stopping it needs the enforcement point to remember proofs it has accepted. Tenuo provides this
-  (`NonceStore`) but does not apply it in its low-level `Authorizer`; the Tenuo adapter enables it.
-  As a consequence, two identical requests in the same proof window count as one.
+  Stopping it needs the enforcement point to remember proofs it has accepted. Tenuo provides this as
+  a separate component (`NonceStore`), which the Tenuo adapter enables. As a consequence, two
+  identical requests in the same proof window count as one.
 - **Approval reuse.** An approval is bound to one exact request, but nothing stops it being presented
   again with a fresh proof. The enforcement point records approvals it has accepted and refuses
   reuse.
-- **Approval clock tolerance.** Approvals are checked with a clock tolerance, and timestamps are whole
-  seconds, so an approval can be accepted up to tolerance plus one second after it expires. The
-  harness sets a 2-second tolerance; production deployments usually allow more and should say how
-  much.
+- **Clock tolerance.** Timestamps are whole seconds and verifiers allow some clock skew, so expiry
+  checks are only as precise as the tolerance. The harness sets a 2-second tolerance; production
+  deployments usually allow more and should say how much.
 - **Ambiguous paths.** Look-alike separators (for example U+FF0F, U+2215), overlong UTF-8 and
   backslashes were initially accepted as ordinary file names. They are harmless on this mock and on
   POSIX, but some platforms and normalizations turn them into separators. The enforcement point now
   refuses them instead of guessing how a downstream tool will read them.
 - **Evidence deletion.** Signed records alone do not reveal a missing record. Records are now
-  hash-linked, so a deletion or reordering breaks the chain. Deleting the newest records is still
-  only detectable if the latest hash is anchored elsewhere, such as a transparency log.
+  hash-linked, so a deletion or reordering breaks the chain, and a signed checkpoint over the record
+  count and latest hash, checked against the evidence key held outside the bundle, catches deleted
+  trailing records.
 
-## Observations about Tenuo 0.3.3
+## Tenuo version
 
-- **AG-1.4, lifetime.** A child that requests a longer lifetime than its parent is not rejected; its
-  expiry is clamped to the parent's, so it never outlives it.
-- **AG-1.9, encoding.** A bit flip in the outer envelope that leaves the signed payload unchanged
-  still verifies. Authority is unaffected (the payload and warrant ID are identical), but the byte
-  encoding of a grant is not unique.
+The harness pins Tenuo 0.3.3. Both behaviours below are within what AG-1 allows, and both are
+tightened in [tenuo-ai/tenuo#997](https://github.com/tenuo-ai/tenuo/pull/997), which is merged and
+will ship in the next release. The pin moves when it does.
+
+- **AG-1.4, lifetime.** A child that requests a longer lifetime than its parent is accepted with its
+  expiry clamped to the parent's; after #997 it is rejected.
+- **AG-1.9, encoding.** Some changes to the outer envelope that leave the signed content unchanged
+  are reported as envelope-only: authority is unaffected, but the encoding is not unique. After #997
+  only the canonical encoding decodes.
+- **Approval expiry.** Clock tolerance also applies to an approval's expiry; after #997 approval
+  expiry is strict and tolerance covers only approvals dated slightly in the future.
 
 ## Limits
 
