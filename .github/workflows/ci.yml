@@ -1,0 +1,28 @@
+name: ag1
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[test]'
+      - run: pytest -q
+      - run: python -m ag1 --out results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ag1-results
+          path: results/
