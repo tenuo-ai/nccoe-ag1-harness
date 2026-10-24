@@ -12,6 +12,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from . import report, scenario  # noqa: E402
 from .adapters import ADAPTERS, load  # noqa: E402
+from .scm import MockSCM  # noqa: E402
 from .steps import STEPS, evidence_run, utility_run  # noqa: E402
 
 
@@ -47,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--service forgejo needs --forgejo-url (or $AG1_FORGEJO_URL) and $AG1_FORGEJO_TOKEN")
         from .forgejo import ForgejoSCM
         scenario.use_service(lambda: ForgejoSCM(args.forgejo_url, token))
+    else:
+        scenario.use_service(MockSCM)
     results = [step(adapter) for step in STEPS]
     utility = utility_run(adapter)
     evidence_world = evidence_run(adapter)

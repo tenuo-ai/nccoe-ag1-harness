@@ -222,7 +222,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         public_key.verify(bytes.fromhex(signed["signature"]), record_payload(body))
         checkpoint_valid = (body.get("type") == "ag1-evidence-checkpoint"
                             and body.get("records") == count and body.get("terminal_hash") == terminal_hash
-                            and body.get("header") == {k: bundle.get(k) for k in HEADER_FIELDS})
+                            and body.get("header") == {k: bundle[k] for k in HEADER_FIELDS if k in bundle})
     except (KeyError, ValueError, TypeError, AttributeError, InvalidSignature):
         pass
     chained = sum(1 for item in records

@@ -69,3 +69,12 @@ def test_names_the_forge_might_rewrite_are_left_as_given(name):
 
 def test_case_is_folded_by_the_forge():
     assert build_world().scm.canonical_repo("ACME/Repo-A") == REPO
+
+
+def test_failed_seed_push_does_not_reveal_the_token():
+    from ag1.scm import ServiceError
+    scm = build_world().scm
+    scm._api("DELETE", f"/repos/{REPO}")
+    with pytest.raises(ServiceError) as excinfo:
+        scm._push_seed(REPO)
+    assert TOKEN not in str(excinfo.value) and TOKEN not in repr(excinfo.value.__cause__)

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import posixpath
 import re
 import subprocess
@@ -96,10 +97,18 @@ class ForgejoSCM:
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
 
+            # The token reaches git through the environment, never the command line, and
+            # failures are re-raised without the command so it cannot end up in a traceback.
+            env = {**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "http.extraHeader",
+                   "GIT_CONFIG_VALUE_0": f"Authorization: token {self._token}", "GIT_TERMINAL_PROMPT": "0"}
+
             def git(*args: str) -> None:
-                subprocess.run(["git", "-c", "user.name=ag1-seed", "-c", "user.email=seed@ag1.invalid",
-                                "-c", "commit.gpgsign=false", *args],
-                               cwd=work, check=True, capture_output=True)
+                done = subprocess.run(["git", "-c", "user.name=ag1-seed", "-c", "user.email=seed@ag1.invalid",
+                                       "-c", "commit.gpgsign=false", *args],
+                                      cwd=work, env=env, capture_output=True, text=True)
+                if done.returncode != 0:
+                    stderr = done.stderr.replace(self._token, "***")[-500:]
+                    raise ServiceError(f"git {args[0]} failed while seeding {repo}: {stderr}")
 
             git("init", "-q", "-b", default)
             for branch in order:
@@ -116,8 +125,7 @@ class ForgejoSCM:
                     target.symlink_to(rel)
                 git("add", "-A")
                 git("commit", "-q", "--allow-empty", "-m", f"seed {branch}")
-            git("-c", f"http.extraHeader=Authorization: token {self._token}",
-                "push", "-q", f"{self.url}/{repo}.git", *order)
+            git("push", "-q", f"{self.url}/{repo}.git", *order)
 
     def _wait_ready(self, timeout: float = 30) -> None:
         deadline = time.monotonic() + timeout
