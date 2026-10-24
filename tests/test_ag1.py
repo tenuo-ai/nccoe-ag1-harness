@@ -36,7 +36,7 @@ def _anchors(world):
 
 def test_exported_evidence_bundle_verifies_and_detects_tampering(tmp_path):
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     assert report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))["valid"]
 
     path = tmp_path / "evidence.json"
@@ -49,7 +49,7 @@ def test_exported_evidence_bundle_verifies_and_detects_tampering(tmp_path):
 def test_resigned_bundle_fails_against_independent_anchors(tmp_path):
     """Editing, truncating, and re-signing with the editor's own key must not verify."""
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     path = tmp_path / "evidence.json"
     bundle = json.loads(path.read_text())
 
@@ -74,7 +74,7 @@ def test_resigned_bundle_fails_against_independent_anchors(tmp_path):
 @pytest.mark.parametrize("keep", [1, 0], ids=["drop-suffix", "drop-all"])
 def test_truncated_bundle_fails_even_with_recomputed_head(tmp_path, keep):
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     path = tmp_path / "evidence.json"
     bundle = json.loads(path.read_text())
     bundle["records"] = bundle["records"][:keep]
@@ -94,7 +94,7 @@ def test_truncated_bundle_fails_even_with_recomputed_head(tmp_path, keep):
 ])
 def test_edited_implementation_header_fails(tmp_path, field, value):
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     path = tmp_path / "evidence.json"
     bundle = json.loads(path.read_text())
     bundle["implementation"][field] = value
@@ -122,7 +122,7 @@ def test_online_verifier_is_not_credited_with_offline_checks():
 ], ids=["implementation-null", "records-null", "record-string", "record-number", "checkpoint-list"])
 def test_malformed_bundle_is_invalid_not_a_crash(tmp_path, edit):
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     path = tmp_path / "evidence.json"
     bundle = json.loads(path.read_text())
     edit(bundle)
@@ -132,7 +132,7 @@ def test_malformed_bundle_is_invalid_not_a_crash(tmp_path, edit):
 
 def test_bundle_naming_another_root_fails(tmp_path):
     world = evidence_run(ADAPTER)
-    report.write([], {}, tmp_path, ADAPTER, evidence_world=world)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     path = tmp_path / "evidence.json"
     bundle = json.loads(path.read_text())
     bundle["trusted_root"] = ADAPTER.new_principal("other-root").public_id

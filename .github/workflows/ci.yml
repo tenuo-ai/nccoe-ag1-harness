@@ -40,3 +40,35 @@ jobs:
         with:
           name: ag1-results-py${{ matrix.python-version }}
           path: results/
+
+  forgejo:
+    # The same steps against a real Forgejo behind the enforcement point.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install --require-hashes -r requirements-lock.txt
+      - run: pip install --no-deps --no-build-isolation -e .
+      - name: Start Forgejo
+        run: |
+          scripts/forgejo-up.sh > "$RUNNER_TEMP/forgejo.env"
+          echo "::add-mask::$(sed -n 's/^export AG1_FORGEJO_TOKEN=//p' "$RUNNER_TEMP/forgejo.env")"
+          sed 's/^export //' "$RUNNER_TEMP/forgejo.env" >> "$GITHUB_ENV"
+          rm "$RUNNER_TEMP/forgejo.env"
+      - run: pytest -q tests/test_forgejo.py
+      - run: python -m ag1 --service forgejo --out results | tee "$RUNNER_TEMP/run.log"
+      - run: |
+          python -m ag1 --verify results $(sed -n 's/^anchors: //p' "$RUNNER_TEMP/run.log")
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: ag1-results-forgejo
+          path: results/

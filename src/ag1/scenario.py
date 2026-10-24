@@ -13,15 +13,16 @@ runs against any adapter.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .adapters import load
 from .adapters.base import Adapter, Principal
 from .gateway import EnforcementPoint, Request
-from .scm import MockSCM
+from .scm import MockSCM, Service
 from .spec import AnyValue, ApprovalGate, Exact, OneOf, Under
 
-REPO = "org/repo-a"
+REPO = "acme/repo-a"
+OTHER_REPO = "acme/repo-b"
 FIX_BRANCH = "fix/cve-2026-1234"
 TASK_ID = "remediate-CVE-2026-1234"
 RELEASE_TASK_ID = "release-app-1.4.2"
@@ -76,7 +77,7 @@ class World:
     adapter: Adapter
     issuer: Principal
     release_approver: Principal
-    scm: MockSCM
+    scm: Service
     gateway: EnforcementPoint
     task_grant: Any
     orchestrator: Agent
@@ -101,6 +102,15 @@ class World:
                                      {"test.run": test_caps(suites)}, ttl=ttl, terminal=True)
 
 
+_service_factory: Callable[[], Service] = MockSCM
+
+
+def use_service(factory: Callable[[], Service]) -> None:
+    """Choose the SCM service every new world starts from (default: the in-memory mock)."""
+    global _service_factory
+    _service_factory = factory
+
+
 def build_world(adapter: Adapter | str | None = None) -> World:
     if adapter is None or isinstance(adapter, str):
         adapter = load(adapter or "tenuo")
@@ -112,7 +122,7 @@ def build_world(adapter: Adapter | str | None = None) -> World:
     runner = p("test-runner", TEST_DOMAIN)
     release = p("release-agent", DEVELOPMENT_DOMAIN)
 
-    scm = MockSCM()
+    scm = _service_factory()
     gateway = EnforcementPoint(adapter=adapter, trusted_root=issuer, scm=scm)
 
     task = adapter.issue(issuer, orch, task_caps(), ttl=7200, task=TASK_ID)

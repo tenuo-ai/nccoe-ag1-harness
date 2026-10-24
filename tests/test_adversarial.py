@@ -54,7 +54,7 @@ PATH_ATTACKS = {
 def test_path_attacks_are_denied(world, name):
     d = world.call(world.patch_agent, "repo.write", {**WRITE, "path": PATH_ATTACKS[name]}, intent="attack")
     assert not d.allowed, (name, d.reason, d.canonical_args)
-    assert world.scm.repos[REPO].branches["main"]["/.github/workflows/release.yml"] == "name: release"
+    assert world.scm.file(REPO, "main", "/.github/workflows/release.yml") == "name: release"
 
 
 @pytest.mark.parametrize("path", ["/src/parser//lexer.c", "src/parser/lexer.c", "/src/parser/./lexer.c",
@@ -67,7 +67,7 @@ def test_equivalent_paths_inside_scope_are_allowed(world, path):
 
 @pytest.mark.parametrize("field,value", [
     ("path", ["/src/parser/x", "/etc/passwd"]), ("path", 5), ("path", None), ("path", {"a": 1}),
-    ("repo", ["org/repo-a"]), ("branch", None),
+    ("repo", ["acme/repo-a"]), ("branch", None),
 ])
 def test_non_string_values_are_refused(world, field, value):
     d = world.call(world.patch_agent, "repo.write", {**WRITE, field: value}, intent="attack")
@@ -76,8 +76,8 @@ def test_non_string_values_are_refused(world, field, value):
 
 @pytest.mark.parametrize("field,value", [
     ("branch", FIX_BRANCH + " "), ("branch", "Fix/cve-2026-1234"), ("branch", "refs/heads/../main"),
-    ("branch", FIX_BRANCH + "/../../main"), ("repo", "org/repo-a/"), ("repo", "org/repo-a.git"),
-    ("repo", "org/repо-a"),  # Cyrillic o
+    ("branch", FIX_BRANCH + "/../../main"), ("repo", "acme/repo-a/"), ("repo", "acme/repo-a.git"),
+    ("repo", "acme/repо-a"),  # Cyrillic o
 ])
 def test_lookalike_identifiers_are_denied(world, field, value):
     assert not world.call(world.patch_agent, "repo.write", {**WRITE, field: value}, intent="attack").allowed
@@ -85,7 +85,7 @@ def test_lookalike_identifiers_are_denied(world, field, value):
 
 @pytest.mark.parametrize("args", [
     {"suite": "parser", "argv": "--suite integration"},
-    {"argv": "--suite parser --repo org/repo-b"},
+    {"argv": "--suite parser --repo acme/repo-b"},
     {"argv": "--suite parser\n--suite integration"},
     {"argv": "--suite parser\t--upload-to=x"},
     {"argv": "--suite=parser --suite=parser"},
