@@ -126,7 +126,6 @@ services:
     profiles: [driver]
     entrypoint: ["ag1", "--mode", "compose"]
     command: ["--out", "/results"]
-    user: "0:0"  # writes the bind-mounted results directory
     environment:
       <<: *env
       AG1_KEYHOLDERS: issuer=http://issuer:8000,approver=http://approver:8000,orchestrator=http://orchestrator:8000,patch-agent=http://patch-agent:8000,test-runner=http://test-runner:8000,release-agent=http://release-agent:8000,thief=http://thief:8000

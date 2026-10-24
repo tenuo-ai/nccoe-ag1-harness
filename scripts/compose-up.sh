@@ -28,6 +28,8 @@ forgejo generate-access-token --username ag1-test-service --token-name ag1-tests
 # Readable by the unprivileged container user; the directory stays private on the host.
 chmod 644 "$SECRETS"/*
 
+# The driver runs as an unprivileged user and writes here.
 mkdir -p results-compose
+chmod 777 results-compose
 docker compose up -d --wait --build
 echo "ready: docker compose run --rm driver"
