@@ -4,9 +4,9 @@ A reproducible run of the AG-1 scenario that Tenuo proposed in its comments on t
 *Secure Software Development, Security, and Operations (DevSecOps) Practices* live document, for
 Example Implementation 3 (agentic AI developing, building, and testing code).
 
-The harness tests the requirements, not a product. Tenuo is the implementation under test here;
-the same steps can be run against any implementation that provides task-scoped, delegable,
-sender-constrained authorization.
+The harness tests the requirements, not a product. Implementations plug in through an adapter
+(see [ADAPTERS.md](ADAPTERS.md)); the scenario, the mock services, argument normalization, and the
+evidence records stay the same for every implementation. A Tenuo adapter is included.
 
 ## Scenario
 
@@ -30,13 +30,13 @@ make. The harness assumes prompt injection succeeds and checks what the enforcem
 | ID | Step | What is exercised |
 | :- | :- | :- |
 | AG-1.1 | Task scoping | Allowed repository action vs. the same action on another repository or branch |
-| AG-1.2 | Action constraints | Path, branch and repository constraints after normalization: `../`, URL and double encoding, symbolic links, `refs/heads/`, `HEAD`, case, extra arguments |
+| AG-1.2 | Action constraints | Path, branch and repository constraints after normalization: `../`, URL and double encoding, symbolic links, `refs/heads/`, `HEAD`, case, extra arguments; command lines parsed into structured flags (ungranted flags, chained commands, repeated flags, stray words) |
 | AG-1.3 | Sender constraint | Copied chain without the bound key, no proof, proof replayed with other arguments |
 | AG-1.4 | Delegation | Narrower child accepted; added tool, relaxed path or branch, added suite, depth past a terminal grant rejected; longer lifetime clamped |
 | AG-1.5 | Prompt injection | Instructions in an issue that ask for a workflow edit, a push to `main`, and a production deploy |
 | AG-1.6 | Human approval | No approval, wrong approver, approval reused for another artifact, valid approval |
 | AG-1.7 | Expiry and revocation | Expired grant; signed revocation list; a concurrent task keeps working |
-| AG-1.8 | Audit reconstruction | Signed evidence records, offline chain re-verification, tamper detection |
+| AG-1.8 | Audit reconstruction | Signed evidence records, offline chain re-verification, approver identity and validity, tamper detection |
 | AG-1.9 | Forged or spliced chain | Bit flips over the whole grant, a link spliced from another chain, an untrusted root |
 | AG-1.10 | Confused deputy | Requests a service could satisfy with its own credential, with an unenforced baseline for comparison |
 
@@ -49,12 +49,13 @@ additional authority and their latency, and denials of in-scope requests.
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/pytest -q
 .venv/bin/python -m ag1 --out results
+.venv/bin/python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 ```
 
 `results/results.md` uses the column layout of NCCoE's functional demonstration results
 (Demo ID, Expected Outcome, Observed Outcome, Comments). `results/results.json` has the same data.
 
-## Findings from the current run (tenuo 0.3.3)
+## Observations from the current run (tenuo 0.3.3)
 
 - **AG-1.4, lifetime.** A child that requests a longer lifetime than its parent is not rejected;
   its expiry is clamped to the parent's, so it never outlives it. The expected-outcome wording in
@@ -65,8 +66,11 @@ python -m venv .venv && .venv/bin/pip install -e '.[test]'
 
 ## Not covered yet
 
-- Parsing command-line flags as structured arguments (Comment 3) is not exercised.
 - Revocation is installed locally at one enforcement point; distribution to remote enforcement
   points is not.
-- Approvals appear in evidence records by count only.
 - A live-model variant that runs inside a CI job.
+- Adapters for other implementations.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

@@ -7,8 +7,6 @@ import platform
 from datetime import datetime, timezone
 from pathlib import Path
 
-import tenuo
-
 from .steps import StepResult
 
 
@@ -21,12 +19,12 @@ def _observed(step: StepResult) -> str:
     return "<br>".join(lines)
 
 
-def to_markdown(steps: list[StepResult], utility: dict) -> str:
+def to_markdown(steps: list[StepResult], utility: dict, adapter) -> str:
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     out = [
         "# AG-1 Functional Demonstration Results",
         "",
-        f"Run {when} with tenuo {tenuo.__version__} on Python {platform.python_version()}. "
+        f"Run {when} against {adapter.name} {adapter.version} on Python {platform.python_version()}. "
         f"{sum(s.passed for s in steps)} of {len(steps)} steps met their expected outcome.",
         "",
         "| Demo ID | Expected Outcome | Observed Outcome | Result | Comments |",
@@ -51,11 +49,11 @@ def to_markdown(steps: list[StepResult], utility: dict) -> str:
     return "\n".join(out) + "\n"
 
 
-def write(steps: list[StepResult], utility: dict, directory: Path) -> None:
+def write(steps: list[StepResult], utility: dict, directory: Path, adapter) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "results.md").write_text(to_markdown(steps, utility), encoding="utf-8")
+    (directory / "results.md").write_text(to_markdown(steps, utility, adapter), encoding="utf-8")
     data = {
-        "tenuo_version": tenuo.__version__,
+        "implementation": {"name": adapter.name, "version": adapter.version},
         "steps": [
             {
                 "id": s.step_id,

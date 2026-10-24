@@ -2,13 +2,11 @@
 
 Every tool call passes through `EnforcementPoint.handle`, which:
 
-1. normalizes the request arguments to their canonical form,
-2. verifies the presented delegation chain against the trusted root only
-   (no call to the issuer), the caller's proof of possession over the raw
-   arguments it signed, the warrant constraints over the canonical
-   arguments, revocation, expiry, and any required approvals,
-3. executes the call with the service's own credential only if all of that
-   passes, and
+1. normalizes the request arguments to their canonical form (harness-side,
+   the same for every implementation),
+2. asks the implementation's verifier to authorize the canonical arguments,
+   with proof of possession checked over the arguments the caller signed,
+3. executes the call with the service's own credential only if authorized,
 4. appends a signed authorization evidence record (Comment 5).
 """
 
@@ -16,36 +14,32 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
+import shlex
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import unquote
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
-from tenuo import Authorizer, PublicKey, SignedRevocationList, Warrant, encode_warrant_stack
-import tenuo
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from .adapters.base import Adapter, Principal
 from .scm import MockSCM
+from .spec import Denied
 
 
 class NormalizationError(ValueError):
     pass
 
 
-def key_hex(key: PublicKey) -> str:
-    return key.to_bytes().hex()
-
-
 @dataclass
 class Request:
     actor: str
-    chain: list[Warrant]
+    chain: list
     tool: str
     args: dict
-    signature: bytes | None
+    proof: Any
     approvals: list | None = None
     # What the scenario intends this call to be. Used only for the utility
     # measures; the enforcement point never sees or uses it.
@@ -64,28 +58,65 @@ class Decision:
         return "allowed" if self.allowed else "denied"
 
 
+_FLAG = re.compile(r"^--([a-z][a-z0-9-]*)(?:=(.*))?$")
+_SHELL_OPERATORS = set(";|&`$<>()")
+
+
+def parse_argv(argv: str) -> dict:
+    """Parse a command line into structured flags; refuse anything that is not a flag."""
+    if any(ch in _SHELL_OPERATORS for ch in argv):
+        raise NormalizationError("shell operator in command line")
+    try:
+        tokens = shlex.split(argv)
+    except ValueError as exc:
+        raise NormalizationError(f"unparseable command line: {exc}") from exc
+    out: dict = {}
+    i = 0
+    while i < len(tokens):
+        m = _FLAG.match(tokens[i])
+        if not m:
+            raise NormalizationError(f"unexpected argument {tokens[i]!r}")
+        key = m.group(1).replace("-", "_")
+        if m.group(2) is not None:
+            value = m.group(2)
+        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("--"):
+            i += 1
+            value = tokens[i]
+        else:
+            value = "true"
+        if key in out:
+            raise NormalizationError(f"flag --{m.group(1)} given more than once")
+        out[key] = value
+        i += 1
+    return out
+
+
 @dataclass
 class EnforcementPoint:
-    trusted_root: PublicKey
+    adapter: Adapter
+    trusted_root: Principal
     scm: MockSCM
     enforce: bool = True
     evidence: list[dict] = field(default_factory=list)
     _signer: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
 
     def __post_init__(self) -> None:
-        self.authorizer = Authorizer(trusted_roots=[self.trusted_root])
+        self.verifier = self.adapter.verifier(self.trusted_root)
 
     @property
     def evidence_public_key(self) -> Ed25519PublicKey:
         return self._signer.public_key()
 
-    def install_revocation_list(self, srl: SignedRevocationList) -> None:
-        self.authorizer.set_revocation_list(srl)
-
     # Normalization (Comment 3): constraints are evaluated on the form the
     # tool will execute, not on the string the agent sent.
     def normalize(self, tool: str, args: dict) -> dict:
         out = dict(args)
+        if "argv" in out:
+            flags = parse_argv(str(out.pop("argv")))
+            for key, value in flags.items():
+                if key in out and out[key] != value:
+                    raise NormalizationError(f"--{key} conflicts with an explicit argument")
+                out[key] = value
         if "repo" in out:
             out["repo"] = self.scm.canonical_repo(str(out["repo"]))
         repo = out.get("repo", "")
@@ -127,16 +158,9 @@ class EnforcementPoint:
             return decision
 
         try:
-            self.authorizer.check_chain_with_pop_args(
-                chain=req.chain,
-                tool=req.tool,
-                pop_args=req.args,
-                constraint_args=canonical,
-                signature=req.signature,
-                approvals=req.approvals,
-            )
-        except Exception as exc:  # every Tenuo failure is a denial
-            decision = Decision(False, f"{type(exc).__name__}: {exc}", canonical)
+            self.verifier.authorize(req.chain, req.tool, req.args, canonical, req.proof, req.approvals)
+        except Denied as exc:
+            decision = Decision(False, str(exc), canonical)
             self._record(req, decision)
             return decision
 
@@ -145,17 +169,13 @@ class EnforcementPoint:
         return decision
 
     def _record(self, req: Request, decision: Decision) -> None:
-        links = [
-            {
-                "warrant_id": w.id,
-                "issuer": key_hex(w.issuer),
-                "holder": key_hex(w.authorized_holder),
-                "tools": list(w.tools),
-                "expires_at": str(w.expires_at()),
-                "task": w.session_id,
-            }
-            for w in req.chain
-        ]
+        links = [vars(self.adapter.info(g)) for g in req.chain]
+        approvals = []
+        for a in req.approvals or []:
+            try:
+                approvals.append(self.adapter.approval_info(a))
+            except Exception as exc:  # record what we can, never fail the call over it
+                approvals.append({"unreadable": type(exc).__name__})
         body = {
             "seq": len(self.evidence) + 1,
             "time": int(time.time()),
@@ -165,13 +185,13 @@ class EnforcementPoint:
             "canonical_args": decision.canonical_args,
             "decision": decision.verdict,
             "reason": decision.reason,
-            "approvals": len(req.approvals or []),
+            "approvals": approvals,
             "root_principal": links[0]["issuer"] if links else None,
             "presenter": links[-1]["holder"] if links else None,
             "task": links[0]["task"] if links else None,
             "delegation_lineage": links,
-            "authorization_chain": encode_warrant_stack(req.chain) if req.chain else None,
-            "verifier": f"tenuo {tenuo.__version__}",
+            "authorization_chain": self.adapter.encode_chain(req.chain) if req.chain else None,
+            "implementation": f"{self.adapter.name} {self.adapter.version}",
             "outcome": decision.result,
             "enforced": self.enforce,
             "intent": req.intent,

@@ -1,0 +1,155 @@
+"""Adapter for Tenuo warrants (Attenuating Authorization Tokens)."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from datetime import datetime
+
+import cbor2
+import tenuo
+from tenuo import (
+    Authorizer,
+    SignedRevocationList,
+    SigningKey,
+    Warrant,
+    compute_request_hash,
+    decode_warrant_stack_base64,
+    encode_warrant_stack,
+)
+from tenuo.approval import ApprovalRequest, sign_approval
+
+from .. import spec
+
+
+@dataclass
+class TenuoPrincipal:
+    name: str
+    key: SigningKey
+
+    @property
+    def public_id(self) -> str:
+        return self.key.public_key.to_bytes().hex()
+
+
+def _constraint(c: spec.Constraint):
+    if isinstance(c, spec.Exact):
+        return tenuo.Exact(c.value)
+    if isinstance(c, spec.OneOf):
+        return tenuo.OneOf(list(c.values))
+    if isinstance(c, spec.Under):
+        return tenuo.Subpath(c.root)
+    if isinstance(c, spec.AnyValue):
+        return tenuo.Wildcard()
+    raise TypeError(f"unsupported constraint {c!r}")
+
+
+def _apply(builder, caps: spec.Capabilities):
+    for tool, args in caps.items():
+        builder = builder.capability(tool, **{k: _constraint(v) for k, v in args.items()})
+    return builder
+
+
+class TenuoVerifier:
+    def __init__(self, root: TenuoPrincipal) -> None:
+        self._authorizer = Authorizer(trusted_roots=[root.key.public_key])
+        self._revocation_version = 0
+
+    def authorize(self, chain, tool, signed_args, constraint_args, proof, approvals):
+        try:
+            self._authorizer.check_chain_with_pop_args(
+                chain=chain, tool=tool, pop_args=signed_args, constraint_args=constraint_args,
+                signature=proof, approvals=approvals,
+            )
+        except Exception as exc:
+            raise spec.Denied(f"{type(exc).__name__}: {exc}") from exc
+
+    def verify_chain(self, chain):
+        self._authorizer.verify_chain(chain)
+
+    def install_revocation(self, issuer: TenuoPrincipal, grants):
+        self._revocation_version += 1
+        builder = SignedRevocationList.builder()
+        for g in grants:
+            builder = builder.revoke(g.id)
+        self._authorizer.set_revocation_list(builder.version(self._revocation_version).build(issuer.key))
+
+
+class TenuoAdapter:
+    name = "tenuo"
+    version = tenuo.__version__
+
+    def new_principal(self, name: str) -> TenuoPrincipal:
+        return TenuoPrincipal(name, SigningKey.generate())
+
+    def issue(self, issuer, holder, caps, ttl, task=None, gate=None):
+        b = _apply(Warrant.mint_builder(), caps)
+        if gate is not None:
+            b = (b.approval_gates({t: None for t in gate.tools})
+                 .required_approvers([p.key.public_key for p in gate.approvers])
+                 .min_approvals(gate.threshold))
+        b = b.holder(holder.key.public_key).ttl(ttl)
+        if task:
+            b = b.session_id(task)
+        return b.mint(issuer.key)
+
+    def delegate(self, parent, parent_holder, child, caps, ttl, terminal=False):
+        try:
+            b = _apply(parent.grant_builder(), caps).holder(child.key.public_key).ttl(ttl)
+            if terminal:
+                b = b.terminal()
+            return b.grant(parent_holder.key)
+        except Exception as exc:
+            raise spec.DelegationRejected(f"{type(exc).__name__}: {exc}") from exc
+
+    def prove(self, chain, holder, tool, args):
+        return bytes(chain[-1].sign(holder.key, tool, args, int(time.time())))
+
+    def approve(self, approver, grant, holder, tool, args):
+        request_hash = compute_request_hash(grant.id, tool, args, holder.key.public_key)
+        request = ApprovalRequest(tool=tool, arguments=args, warrant_id=grant.id, request_hash=request_hash)
+        return sign_approval(request, approver.key, external_id=f"{approver.name}@example.org")
+
+    def verifier(self, trusted_root):
+        return TenuoVerifier(trusted_root)
+
+    def info(self, grant) -> spec.GrantInfo:
+        return spec.GrantInfo(
+            grant_id=grant.id,
+            issuer=grant.issuer.to_bytes().hex(),
+            holder=grant.authorized_holder.to_bytes().hex(),
+            tools=list(grant.tools),
+            expires_at=str(grant.expires_at()),
+            task=grant.session_id,
+        )
+
+    def approval_info(self, approval) -> dict:
+        payload = cbor2.loads(approval.payload)
+        return {
+            "approver": approval.approver_key.to_bytes().hex(),
+            "approver_identity": payload.get("external_id"),
+            "approved_at": payload.get("approved_at"),
+            "expires_at": payload.get("expires_at"),
+            "request_hash": bytes(payload.get("request_hash", b"")).hex(),
+        }
+
+    def expires_at(self, grant) -> float:
+        value = grant.expires_at()
+        if isinstance(value, datetime):
+            return value.timestamp()
+        return datetime.fromisoformat(str(value)).timestamp()
+
+    def encode_chain(self, chain) -> str:
+        return encode_warrant_stack(chain)
+
+    def decode_chain(self, encoded: str) -> list:
+        return decode_warrant_stack_base64(encoded)
+
+    def to_bytes(self, grant) -> bytes:
+        return bytes(grant.to_bytes())
+
+    def from_bytes(self, data: bytes):
+        return Warrant.from_bytes(data)
+
+    def signed_content(self, grant) -> bytes:
+        return bytes(grant.payload_bytes)
