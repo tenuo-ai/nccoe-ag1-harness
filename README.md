@@ -84,9 +84,10 @@ and a list of trusted originating principals, receives a grant delegated to a te
 as belonging to another domain. It checks the complete delegation chain against the trusted issuer
 (the adapter's job), and compares the requested audience with its own and the root holder with its
 allowlist (the reference enforcement point's job). The same authority presented to another service,
-rooted at an untrusted issuer, or originating from an unrecognized principal is refused. Both
-enforcement points run in one process, and the domain labels are not carried in the grants; a
-deployment across real organizational boundaries is not tested.
+rooted at an untrusted issuer, or originating from an unrecognized principal is refused. In-process,
+both enforcement points are objects in one process; in compose mode (below) each is its own service.
+Domain labels are not carried in the grants in either mode, and a deployment across real
+organizational boundaries is not tested.
 
 The agents are scripted; no model is involved. Each step assumes prompt injection succeeds and the
 agent does what it is told, and then checks what the enforcement point allows. That is the property
@@ -103,6 +104,31 @@ symbolic links are resolved from the repository itself. After every write the fi
 the canonical path. Every world deletes and recreates the seed repositories, so steps start from
 the same state. Test runs and deployments are still recorded by the harness in this mode.
 
+### Compose mode
+
+`compose.yaml` runs the same steps with every party and enforcement point as a separate container:
+
+```
+ key holders (issuer, approver, orchestrator, patch agent, test runner, release agent, thief)
+   │ each signs only with the keys it holds; requests leave from the presenting agent's container
+   ▼
+ enforcement points: main · receiving (test domain) · other service · baseline (unenforced)
+   │ each with its own evidence key, audience and allowed origins
+   ▼
+ Forgejo (admin token) · test service (read-only token, runs the repository's pytest suites) · staging sink
+```
+
+- Private keys never leave their key holder. The driver that runs the steps holds only grants,
+  proofs and approvals, which is what an observer of the traffic could hold.
+- A copied chain in AG-1.3 is presented from the thief's container, which does not hold the key.
+- Revocation in AG-1.7 is signed by the issuer and pushed to all four enforcement points.
+- The test service checks out the branch and runs real `unit`, `parser` and `integration` suites.
+  The seed repository's lexer has the CVE: the parser suite fails until the patch is written.
+- Each enforcement point exports its own evidence bundle, verified against its own key. AG-1.8 also
+  traces a cross-domain test run through the receiving enforcement point's log.
+- Networks are internal. Agents reach enforcement points but not Forgejo or the internet. The test
+  service reaches Forgejo and the enforcement points that call it, but not the agents.
+
 ### What the implementation supplies
 
 The report does not attribute controls supplied by the harness to the adapter under test.
@@ -112,10 +138,10 @@ The report does not attribute controls supplied by the harness to the adapter un
 | Grant issuance, attenuation, proof, and authorization verification | Adapter / implementation under test |
 | Argument normalization | AG-1 reference enforcement point |
 | Receiver audience comparison and originating-principal allowlist (AG-1.4) | AG-1 reference enforcement point |
-| Trust-domain labels (AG-1.4) | AG-1 scenario; not carried in grants |
+| Trust-domain labels (AG-1.4) | AG-1 scenario, or deployment configuration in compose mode; not carried in grants |
 | Enforcement immediately before execution | AG-1 reference enforcement point |
 | Evidence signing and hash linking | AG-1 reference enforcement point |
-| SCM, CI/CD, and deployment behavior | AG-1 mock service, or Forgejo for repositories and pull requests (test runs and deployments recorded by the harness) |
+| SCM, CI/CD, and deployment behavior | AG-1 mock service; Forgejo for repositories and pull requests; in compose mode, also a test service running pytest and a staging sink |
 
 Each adapter declares its delegation, verification, and artifact modes. This allows an
 authorization-server-mediated OAuth design to describe itself differently from a holder-signed,
@@ -176,12 +202,34 @@ eval "$(scripts/forgejo-up.sh)"    # starts Forgejo 16.0.6, sets AG1_FORGEJO_URL
 The run deletes and recreates `acme/repo-a` and `acme/repo-b` on that instance, so point it only at
 a throwaway forge.
 
+To run in compose mode (needs Docker Compose):
+
+```bash
+scripts/compose-up.sh            # Forgejo, its two tokens as Docker secrets, then every service
+docker compose run --rm driver   # writes results-compose/ and prints the anchors
+docker compose down -v
+```
+
+A compose run prints one evidence key per enforcement point, and each enforcement point also logs
+its key when it starts. Verify with one `--evidence-key NAME=HEX` per bundle in
+`results-compose/evidence/`:
+
+```bash
+.venv/bin/python -m ag1 --verify results-compose --trusted-root <hex> \
+  --evidence-key main=<hex> --evidence-key receiving=<hex> \
+  --evidence-key other-service=<hex> --evidence-key baseline=<hex>
+```
+
+`tests/test_compose_loopback.py` runs the same topology over HTTP on localhost, without Docker.
+
 `results/results.md` uses the column layout of NCCoE's functional demonstration results (Demo ID,
 Expected Outcome, Observed Outcome, Comments) and adds an explicit result column.
 `results/results.json` has the same data. A run also exports:
 
-- `evidence.json`: the raw signed, hash-linked evidence records, authorization chains, trusted root,
-  evidence public key, and terminal hash;
+- `evidence.json` (compose mode: `evidence/<enforcement point>.json`): the raw signed, hash-linked
+  evidence records, authorization chains, trusted root, evidence public key, and terminal hash. Every
+  allowed record's chain must re-verify; a denied record may carry an invalid chain, since that is
+  why it was denied;
 - `manifest.json`: the harness commit, platform, Python version, and installed package versions.
 
 The evidence bundle can be checked after the original process has exited, against two anchors
@@ -253,11 +301,16 @@ will ship in the next release. The pin moves when it does.
 ## Limits
 
 - The agents are scripted; the harness tests the authorization layer, not model behavior.
-- With `--service forgejo` the repositories and pull requests are real; test runs and deployments
-  are still recorded by the harness, and the enforcement points run in one process.
+- Repositories, pull requests and test runs are real only with Forgejo; in-process with
+  `--service forgejo`, test runs and deployments are still recorded by the harness. Deployment is a
+  sink in every mode.
+- In compose mode, containers share the host's clock and talk plain HTTP inside internal Docker
+  networks, without mutual TLS or workload identity. An enforcement point knows the domain labels of
+  the issuer and the orchestrator from its configuration; other parties are recorded as `unknown`.
 - Normalization, the reference enforcement point, and evidence signing are harness components, not
   claims about the adapter. Every report identifies this responsibility split.
-- Revocation is installed at one enforcement point; distribution to many is not tested.
+- Revocation is pushed to every enforcement point in the deployment, synchronously; delayed or
+  failed propagation is not tested.
 - Misuse inside the granted scope is not prevented, only bounded. Code review, testing and branch
   protection remain necessary.
 - Only the Tenuo adapter exists so far.

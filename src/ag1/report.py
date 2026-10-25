@@ -22,7 +22,8 @@ RESPONSIBILITIES = [
     ("Grant issuance, attenuation, proof, and authorization verification", "Adapter / implementation under test"),
     ("Argument normalization", "AG-1 reference enforcement point"),
     ("Receiver audience comparison and originating-principal allowlist (AG-1.4)", "AG-1 reference enforcement point"),
-    ("Trust-domain labels (AG-1.4)", "AG-1 scenario; not carried in grants"),
+    ("Trust-domain labels (AG-1.4)",
+     "AG-1 scenario, or deployment configuration in compose mode; not carried in grants"),
     ("Enforcement immediately before execution", "AG-1 reference enforcement point"),
     ("Evidence signing and hash linking", "AG-1 reference enforcement point"),
 ]
