@@ -488,12 +488,12 @@ setuptools==82.0.0 \
     --hash=sha256:22e0a2d69474c6ae4feb01951cb69d515ed23728cf96d05513d36e42b62b37cb \
     --hash=sha256:70b18734b607bd1da571d097d236cfcfacaf01de45717d59e6e04b96877532e0
     # via -r requirements.in
-tenuo==0.3.3 \
-    --hash=sha256:07aa2b72c9d3bf17e098ee7a6feaa6c0d86d71a119c912d54131306c87970208 \
-    --hash=sha256:8b6d92f9f26fe9df0a5470d5c282aba7ed22924a9c440826a3209cd13f36e6b4 \
-    --hash=sha256:c4aeaba9e4e44e8c43e894f3d9cab4c4a832d179ad8e5860d50a3e8012adea35 \
-    --hash=sha256:eb85ebace4a8dd7710dfbee9721761a1611eb2e444e5862018bfe07ba03e813c \
-    --hash=sha256:f3c49689daa64b793dea85b3f8ace805a3a022a98d42f44541014787e7d7a268
+tenuo==0.3.5 \
+    --hash=sha256:0793a76cbeadf05dc273ec07053c834e39dd0d29fce967fa6b3dcede7d28972e \
+    --hash=sha256:09c76f2ae0ff9c6e8b71531e95f73a0aaa629b016b7f5126f0bf5d4e89a69fba \
+    --hash=sha256:0d836f12879c73c7c49461e604f89df148064bb97128e6ffc096bb0adc482543 \
+    --hash=sha256:31588cb2154dbccf475d7372200e8da9eb6c905174138f95cfe0993ffe67db3b \
+    --hash=sha256:44bd82f5c2fe6896f7026cce2eb14cb61bb7722e15b9aec250a60ce2ca4682e5
     # via -r requirements.in
 tomli==2.5.0 ; python_full_version < '3.11' \
     --hash=sha256:069435bd5480429b98c5e5afb02ab21c219b6f0064680671c6dc0d46817346ea \
