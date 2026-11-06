@@ -265,9 +265,9 @@ These came from attacking the harness, not from the ten steps as first written.
 - **Approval reuse.** An approval is bound to one exact request, but nothing stops it being presented
   again with a fresh proof. The enforcement point records approvals it has accepted and refuses
   reuse.
-- **Clock tolerance.** Timestamps are whole seconds and verifiers allow some clock skew, so expiry
-  checks are only as precise as the tolerance. The harness sets a 2-second tolerance; production
-  deployments usually allow more and should say how much.
+- **Clock tolerance.** Timestamps are whole seconds and verifiers allow some clock skew for
+  approvals dated slightly in the future; expiry itself is strict. The harness sets a 2-second
+  tolerance; production deployments usually allow more and should say how much.
 - **Ambiguous paths.** Look-alike separators (for example U+FF0F, U+2215), overlong UTF-8 and
   backslashes were initially accepted as ordinary file names. They are harmless on this mock and on
   POSIX, but some platforms and normalizations turn them into separators. The enforcement point now
@@ -286,17 +286,16 @@ These came from attacking the harness, not from the ten steps as first written.
 
 ## Tenuo version
 
-The harness pins Tenuo 0.3.3. Both behaviours below are within what AG-1 allows, and both are
-tightened in [tenuo-ai/tenuo#997](https://github.com/tenuo-ai/tenuo/pull/997), which is merged and
-will ship in the next release. The pin moves when it does.
+The harness pins Tenuo 0.3.5, which includes
+[tenuo-ai/tenuo#997](https://github.com/tenuo-ai/tenuo/pull/997). Three behaviours in the results
+come from that change:
 
-- **AG-1.4, lifetime.** A child that requests a longer lifetime than its parent is accepted with its
-  expiry clamped to the parent's; after #997 it is rejected.
-- **AG-1.9, encoding.** Some changes to the outer envelope that leave the signed content unchanged
-  are reported as envelope-only: authority is unaffected, but the encoding is not unique. After #997
-  only the canonical encoding decodes.
-- **Approval expiry.** Clock tolerance also applies to an approval's expiry; after #997 approval
-  expiry is strict and tolerance covers only approvals dated slightly in the future.
+- **AG-1.4, lifetime.** A child that requests a longer lifetime than its parent is rejected. AG-1
+  also allows an implementation to limit the child to the parent's expiry.
+- **AG-1.9, encoding.** Only the canonical encoding decodes, so no change to the outer envelope is
+  accepted.
+- **Approval expiry.** Approval expiry is strict. Clock tolerance covers only approvals dated
+  slightly in the future.
 
 ## Limits
 
