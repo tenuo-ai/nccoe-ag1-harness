@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -135,7 +136,7 @@ def _revocation_list(issuer: TenuoPrincipal, grants, version: int) -> bytes:
 
 class TenuoAdapter:
     name = "tenuo"
-    version = tenuo.__version__
+    version = importlib.metadata.version("tenuo")  # tenuo.__version__ reads 0.3.4 in 0.3.5
     capabilities = spec.AdapterCapabilities(
         delegation_mode="holder_signed",
         verification_mode="offline_chain",

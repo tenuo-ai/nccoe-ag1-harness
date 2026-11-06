@@ -344,7 +344,7 @@ def ag1_06(adapter=None) -> StepResult:
                w.call(ra, "deploy.staging", {"artifact": ARTIFACT_NEXT}, approvals=[approval(w.release_approver)],
                       intent="attack"), False)
     short = a.approve(w.release_approver, grant, ra.principal, "deploy.staging", args, ttl=1)
-    time.sleep(5)  # > validity + clock tolerance + 1s timestamp granularity
+    time.sleep(5)  # > validity + 1s timestamp granularity
     r.decision("approval used after it expired (1s validity, used after 5s)",
                w.call(ra, "deploy.staging", args, approvals=[short], intent="attack"), False)
     valid = approval(w.release_approver)
@@ -354,8 +354,8 @@ def ag1_06(adapter=None) -> StepResult:
     r.decision("development task attempts the deploy (no deploy authority at all)",
                w.call(w.patch_agent, "deploy.staging", args, intent="attack"), False)
     r.fact("deployments executed", "1", str(len(w.scm.deployments)), len(w.scm.deployments) == 1)
-    r.comments = ("Approval binding and expiry are checked by the implementation (with a 2s clock tolerance in "
-                  "this harness). Single use is enforced by the enforcement point remembering approvals it has "
+    r.comments = ("Approval binding and strict expiry are checked by the implementation (a 2s clock tolerance in "
+                  "this harness covers only approvals dated slightly in the future). Single use is enforced by the enforcement point remembering approvals it has "
                   "accepted.")
     return r
 
