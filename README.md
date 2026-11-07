@@ -10,6 +10,15 @@ paths that task needs. Before each tool call runs, an *enforcement point* checks
 grant. AG-1's scripted agents attempt both legitimate work and deliberate violations across ten
 steps, then the harness reports each decision with signed evidence.
 
+```mermaid
+flowchart LR
+    A[Task authorization system] -->|task grant| B[AI agents]
+    B -->|tool call with grant and proof| C{Enforcement point}
+    C -->|allowed| D[Source control, tests, deployment]
+    C -->|denied| E[Refused before it runs]
+    C -->|every decision| F[Signed evidence]
+```
+
 **Who built this.** AG-1 is maintained by [Tenuo](https://github.com/tenuo-ai/tenuo), which makes
 open-source task-scoped authorization for AI agents. Tenuo is the first implementation tested here,
 and other implementations can be integrated through an [adapter](ADAPTERS.md).
