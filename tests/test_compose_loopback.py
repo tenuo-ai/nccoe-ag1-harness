@@ -5,18 +5,21 @@ the in-memory mock and the test service is a stub that records runs; the contain
 deployment replaces both with Forgejo and real pytest runs.
 """
 
+import os
+
 import pytest
 
 from ag1 import report, scenario
 from ag1.adapters import load
 from ag1.compose import keyholder, pep, sink
 from ag1.compose.driver import ComposeConfig, RemotePrincipal, deployment
-from ag1.compose.http import serve_in_thread
+from ag1.compose.http import RemoteError, call, serve_in_thread
 from ag1.gateway import EnforcementPoint
 from ag1.scenario import CONTROL_DOMAIN, DEVELOPMENT_DOMAIN, TEST_AUDIENCE, TEST_DOMAIN, SCM_AUDIENCE, build_world
 from ag1.scm import MockSCM
 from ag1.steps import STEPS, evidence_run, utility_run
 
+ADAPTER = os.environ.get("AG1_ADAPTER", "tenuo")
 HOLDERS = {
     "issuer": [("task-authorization-system", CONTROL_DOMAIN)],
     "approver": [],
@@ -48,8 +51,20 @@ def topology():
         servers.append(server)
         return url
 
-    peps: dict[str, str] = {}
-    keyholders = {name: start(keyholder.routes(load("tenuo"), ids, peps)) for name, ids in HOLDERS.items()}
+    peps: dict[str, str] = {}  # what key holders can reach: not the baseline
+    issuer_calls = []
+
+    def holder_routes(name, ids):
+        routes = keyholder.routes(load(ADAPTER), ids, peps)
+        if name != "issuer":
+            return routes
+
+        def counted(handler):
+            return lambda body: (issuer_calls.append(1), handler(body))[1]
+
+        return {route: counted(handler) for route, handler in routes.items()}
+
+    keyholders = {name: start(holder_routes(name, ids)) for name, ids in HOLDERS.items()}
     sink_url, test_url = start(sink.routes()), start(_stub_tests(test_state))
     mock = MockSCM()
     issuer = scenario_identity(keyholders["issuer"], "task-authorization-system")
@@ -61,43 +76,46 @@ def topology():
                           "trusted_origin_principals": {origin}},
         "baseline": {"enforce": False},
     }
+    all_peps = {}
     for name, extra in configs.items():
-        gateway = EnforcementPoint(adapter=load("tenuo"), trusted_root=issuer, name=name,
+        gateway = EnforcementPoint(adapter=load(ADAPTER), trusted_root=issuer, name=name,
                                    scm=pep.ComposeService(mock, test_url, sink_url), **extra)
-        peps[name] = start(pep.routes(gateway, issuer))
+        all_peps[name] = start(pep.routes(gateway, issuer))
+        if name != "baseline":
+            peps[name] = all_peps[name]
 
     def fresh():
         mock.__init__()
         return mock
 
-    scenario.use_deployment(deployment(ComposeConfig(keyholders, dict(peps), test_url, sink_url, fresh)))
-    yield {"peps": peps, "issuer": issuer, "tests": test_state}
+    scenario.use_deployment(deployment(ComposeConfig(keyholders, all_peps, test_url, sink_url, fresh)))
+    yield {"peps": all_peps, "issuer": issuer, "tests": test_state, "keyholders": keyholders,
+           "issuer_calls": issuer_calls}
     scenario.use_deployment(None)
     for server in servers:
         server.shutdown()
 
 
 def scenario_identity(url, name):
-    from ag1.compose.http import call
     return next(i["public_id"] for i in call(f"{url}/identities")["identities"] if i["name"] == name)
 
 
 @pytest.mark.parametrize("step", STEPS, ids=lambda s: s.__name__)
 def test_step_meets_expected_outcome_across_services(topology, step):
-    result = step()
+    result = step(ADAPTER)
     failed = [c for c in result.checks if c.applicable and not c.passed]
     assert not failed, [(c.description, c.expected, c.observed, c.detail) for c in failed]
 
 
 def test_utility_run_across_services(topology):
-    u = utility_run()
+    u = utility_run(ADAPTER)
     assert u["workflow_completed"] and u["tests_passed"] and u["mistaken_denials"] == 0
 
 
 def test_failed_tests_do_not_count_as_a_completed_workflow(topology):
     topology["tests"]["passed"] = False
     try:
-        u = utility_run()
+        u = utility_run(ADAPTER)
     finally:
         topology["tests"]["passed"] = True
     assert not u["tests_passed"] and not u["workflow_completed"]
@@ -105,34 +123,59 @@ def test_failed_tests_do_not_count_as_a_completed_workflow(topology):
 
 
 def test_driver_holds_no_private_keys(topology):
-    w = build_world()
+    w = build_world(ADAPTER)
     for p in (w.issuer, w.release_approver, w.orchestrator.principal, w.patch_agent.principal):
         assert isinstance(p, RemotePrincipal) and not hasattr(p, "key")
 
 
 def test_stable_identities_survive_across_worlds(topology):
-    a, b = build_world(), build_world()
+    a, b = build_world(ADAPTER), build_world(ADAPTER)
     assert a.issuer.public_id == b.issuer.public_id == topology["issuer"]
     assert a.patch_agent.principal.public_id != b.patch_agent.principal.public_id
 
 
 def test_revocation_reaches_every_enforcement_point(topology):
-    w = build_world()
+    w = build_world(ADAPTER)
     args = {"repo": scenario.REPO, "branch": scenario.FIX_BRANCH, "path": "/src/parser/x.c", "content": "x"}
     assert w.call(w.patch_agent, "repo.write", args).allowed
     reach = w.revoke([w.patch_agent.chain[-1]])
-    assert reach["enforcement_points"] == 4  # each acknowledged the signed list
+    assert reach["enforcement_points"] == 3  # each enforcing point acknowledged the signed list
     assert "Revoked" in w.call(w.patch_agent, "repo.write", {**args, "content": "y"}).reason
 
 
+def test_decisions_make_no_call_to_the_issuer(topology):
+    w = build_world(ADAPTER)
+    args = {"repo": scenario.REPO, "branch": scenario.FIX_BRANCH, "path": "/src/parser/x.c", "content": "x"}
+    allowed = w.patch_agent.request("repo.write", args)
+    denied = w.patch_agent.request("repo.write", {**args, "branch": "main"})
+    before = len(topology["issuer_calls"])
+    assert w.gateway.handle(allowed).allowed
+    assert not w.gateway.handle(denied).allowed
+    assert len(topology["issuer_calls"]) == before
+
+
+def test_key_holders_cannot_reach_the_baseline(topology):
+    with pytest.raises(RemoteError):
+        call(f"{topology['keyholders']['patch-agent']}/send", {"pep": "baseline", "request": {}})
+
+
+def test_undecodable_request_is_refused_and_recorded(topology):
+    url = topology["peps"]["main"]
+    before = len(call(f"{url}/evidence")["records"])
+    found = call(f"{url}/handle", {"actor": "x", "tool": "repo.write", "args": {}, "chain": "not a chain"})
+    assert not found["allowed"] and found["reason"].startswith("MalformedRequest")
+    records = call(f"{url}/evidence")["records"]
+    assert len(records) == before + 1 and records[-1]["record"]["decision"] == "denied"
+
+
 def test_every_bundle_verifies_against_its_own_key(topology, tmp_path):
-    w = evidence_run()
+    w = evidence_run(ADAPTER)
     bundles = {g.name: g.bundle() for g in w.gateways}
     report.write_bundles(tmp_path, bundles)
     keys = {g.name: g.evidence_public_key_hex for g in w.gateways}
-    result = report.verify_bundles(tmp_path, load("tenuo"), topology["issuer"], keys)
+    result = report.verify_bundles(tmp_path, load(ADAPTER), topology["issuer"], keys)
     assert result["valid"], result
     swapped = {**keys, "main": keys["receiving"]}
-    assert not report.verify_bundles(tmp_path, load("tenuo"), topology["issuer"], swapped)["valid"]
+    assert not report.verify_bundles(tmp_path, load(ADAPTER), topology["issuer"], swapped)["valid"]
     del keys["baseline"]
-    assert not report.verify_bundles(tmp_path, load("tenuo"), topology["issuer"], keys)["valid"]
+    assert not report.verify_bundles(tmp_path, load(ADAPTER), topology["issuer"], keys)["valid"]

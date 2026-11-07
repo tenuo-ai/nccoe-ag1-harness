@@ -12,8 +12,9 @@ import pytest
 
 from ag1 import steps
 from ag1.adapters.tenuo_adapter import TenuoAdapter, TenuoVerifier
-from ag1.gateway import GENESIS, EnforcementPoint, Request
-from ag1.scenario import ARTIFACT, FIX_BRANCH, REPO, build_world
+from ag1.gateway import GENESIS, Decision, EnforcementPoint, Request, chain_head, checkpoint_covers
+from ag1.scenario import ARTIFACT, FIX_BRANCH, REPO, build_world, write_caps
+from ag1.scm import ServiceError
 from ag1.spec import AnyValue, Denied, DelegationRejected
 
 WRITE = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.c", "content": "x"}
@@ -45,6 +46,8 @@ PATH_ATTACKS = {
     "relative traversal": "../../etc/passwd",
     "symlink": "/src/parser/ci/release.yml",
     "symlink directory itself": "/src/parser/ci",
+    "symlink behind doubled slash": "//src/parser/ci/release.yml",
+    "symlink behind tripled slash": "///src/parser/ci/release.yml",
     "case change": "/SRC/parser/lexer.c",
     "too long": "/src/parser/" + "a/" * 2100 + "x.c",
 }
@@ -58,7 +61,8 @@ def test_path_attacks_are_denied(world, name):
 
 
 @pytest.mark.parametrize("path", ["/src/parser//lexer.c", "src/parser/lexer.c", "/src/parser/./lexer.c",
-                                  "/src/parser/sub/../lexer.c", "/src/parser/lex%65r.c"])
+                                  "/src/parser/sub/../lexer.c", "/src/parser/lex%65r.c",
+                                  "//src/parser/lexer.c"])
 def test_equivalent_paths_inside_scope_are_allowed(world, path):
     d = world.call(world.patch_agent, "repo.write", {**WRITE, "path": path, "content": path})
     assert d.allowed, (path, d.reason)
@@ -67,7 +71,7 @@ def test_equivalent_paths_inside_scope_are_allowed(world, path):
 
 @pytest.mark.parametrize("field,value", [
     ("path", ["/src/parser/x", "/etc/passwd"]), ("path", 5), ("path", None), ("path", {"a": 1}),
-    ("repo", ["acme/repo-a"]), ("branch", None),
+    ("repo", ["acme/repo-a"]), ("branch", None), ("content", {"a": 1}), ("content", 5),
 ])
 def test_non_string_values_are_refused(world, field, value):
     d = world.call(world.patch_agent, "repo.write", {**WRITE, field: value}, intent="attack")
@@ -195,21 +199,66 @@ def test_rejected_revocation_does_not_poison_local_state(world):
     assert not world.call(world.patch_agent, "repo.write", WRITE).allowed
 
 
-def test_evidence_truncation_is_only_detectable_with_an_anchor(world):
-    import hashlib
-
-    from ag1.gateway import record_payload
-
+def test_checkpoint_detects_truncation_of_its_own_log(world):
     world.call(world.patch_agent, "repo.write", WRITE)
     world.call(world.orchestrator, "repo.read", {"repo": REPO})
-    anchored_head = world.gateway._head  # what would be published to a transparency log
-    del world.gateway.evidence[-1]
-    audited = steps.verify_evidence(world.gateway.evidence, world.gateway.evidence_public_key, world.adapter,
-                                     world.issuer)
-    assert all(x["linked"] for x in audited)  # the truncated log is still self-consistent...
-    last = world.gateway.evidence[-1]
-    head = hashlib.sha256(record_payload(last["record"]) + bytes.fromhex(last["signature"])).hexdigest()
-    assert head != anchored_head  # ...so only the anchored head reveals the truncation
+    gateway = world.gateway
+    latest = gateway.checkpoint()
+    assert checkpoint_covers(latest, gateway.evidence_public_key, gateway.evidence)
+    assert not checkpoint_covers(latest, gateway.evidence_public_key, gateway.evidence[:-1])
+
+
+def test_rollback_to_an_earlier_checkpoint_needs_an_anchored_head(world):
+    """An earlier export is self-consistent, so only a head anchored elsewhere reveals what came after it."""
+    gateway = world.gateway
+    world.call(world.patch_agent, "repo.write", WRITE)
+    earlier, earlier_records = gateway.checkpoint(), list(gateway.evidence)
+    world.call(world.orchestrator, "repo.read", {"repo": REPO})
+    anchored_head = chain_head(gateway.evidence)
+    assert checkpoint_covers(earlier, gateway.evidence_public_key, earlier_records)
+    assert chain_head(earlier_records) != anchored_head
+
+
+@pytest.mark.parametrize("enforce", [True, False], ids=["enforced", "baseline"])
+def test_failed_execution_still_leaves_a_record(world, monkeypatch, enforce):
+    gateway = world.gateway if enforce else world.baseline
+
+    def fails(tool, args):
+        raise ServiceError("stored the write, then lost the connection")
+
+    monkeypatch.setattr(gateway.scm, "execute", fails)
+    with pytest.raises(ServiceError):
+        world.call(world.patch_agent, "repo.write", WRITE, gateway=gateway)
+    record = gateway.evidence[-1]["record"]
+    assert record["decision"] == "allowed" and record["outcome"] == "execution failed: ServiceError"
+
+
+def test_a_service_failure_does_not_count_as_a_refusal(world, monkeypatch):
+    def fails(repo):
+        raise ServiceError("forge unavailable")
+
+    monkeypatch.setattr(world.gateway.scm, "canonical_repo", fails)
+    decision = world.call(world.patch_agent, "repo.write", WRITE, intent="attack")
+    assert not decision.allowed and decision.reason.startswith("ServiceError")
+    result = steps.StepResult("X", "t", "e")
+    result.decision("denied because the service failed", decision, False)
+    assert not result.passed
+
+
+def test_denial_for_the_wrong_reason_fails_the_row():
+    result = steps.StepResult("X", "t", "e", reasons={"revoked": ("RevokedError",)})
+    result.decision("revoked grant", Decision(False, "ExpiredError: too late", {}), False, "revoked")
+    assert not result.passed and result.checks[0].expected == "denied (RevokedError)"
+
+
+def test_forged_widened_link_is_refused_without_changing_main(world):
+    a, patch, pk = world.adapter, world.patch_agent.chain[-1], world.patch_agent.principal
+    other = a.new_principal("other-agent")
+    link = a.forge_link(patch, pk, other, {"repo.write": write_caps(branch="main", root="/")}, ttl=60)
+    agent = world.agent(other, [world.task_grant, patch, link])
+    args = {"repo": REPO, "branch": "main", "path": "/.github/workflows/release.yml", "content": "x"}
+    assert not world.gateway.handle(agent.request("repo.write", args)).allowed
+    assert world.scm.file(REPO, "main", "/.github/workflows/release.yml") == "name: release"
 
 
 # Mutation tests: switch off one defense and check the harness reports it ------------------------
@@ -284,8 +333,9 @@ def _delegate_without_audience(self, parent, parent_holder, child, caps, ttl, te
 
 
 SABOTAGE = {
-    "verifier allows everything": (lambda: adapter_with(AllowAll), ["ag1_01", "ag1_02", "ag1_03", "ag1_05",
+    "verifier allows everything": (lambda: adapter_with(AllowAll), ["ag1_01", "ag1_02", "ag1_03", "ag1_04", "ag1_05",
                                                                     "ag1_06", "ag1_07", "ag1_09", "ag1_10"]),
+    "approval single use off": (lambda: adapter_with(NoApprovalSingleUse), ["ag1_06"]),
     "proof failures ignored": (lambda: adapter_with(IgnoreProofFailures), ["ag1_03"]),
     "no replay cache": (lambda: adapter_with(NoReplayCache), ["ag1_03"]),
     "revocation ignored": (lambda: adapter_with(NoRevocation), ["ag1_07"]),
@@ -321,12 +371,40 @@ def test_harness_detects_unlinked_evidence(monkeypatch):
     assert not steps.ag1_08(TenuoAdapter()).passed
 
 
-def test_approval_single_use_needs_its_own_check():
-    """With single use disabled, the AG-1.6 step still passes (replay protection catches the identical
-    request), so this adversarial test is what covers it."""
-    world = build_world(adapter_with(NoApprovalSingleUse))
-    with pytest.raises(AssertionError):
-        test_approval_cannot_be_reused_with_a_fresh_proof(world)
+def test_harness_detects_a_baseline_that_refuses(monkeypatch):
+    """AG-1.10's comparison must come from the baseline actually rewriting the workflow."""
+    from ag1.scm import MockSCM
+
+    real = MockSCM.execute
+
+    def refuses_workflow(self, tool, args):
+        if tool == "repo.write" and args["branch"] == "main":
+            return "did nothing"
+        return real(self, tool, args)
+
+    monkeypatch.setattr(MockSCM, "execute", refuses_workflow)
+    assert not steps.ag1_10(TenuoAdapter()).passed
+
+
+def test_harness_detects_revocation_missing_at_a_receiving_point(monkeypatch):
+    from ag1 import scenario
+
+    real = scenario.local_deployment
+
+    def main_only(adapter):
+        d = real(adapter)
+
+        def revoke(grants):
+            d["gateway"].verifier.install_revocation(d["issuer"], grants)
+            return {"ms": 0.0, "enforcement_points": 1}
+
+        return {**d, "revoke": revoke}
+
+    scenario.use_deployment(main_only)
+    try:
+        assert not steps.ag1_07(TenuoAdapter()).passed
+    finally:
+        scenario.use_deployment(None)
 
 
 def test_targeted_request_cannot_be_replayed_at_main(world):

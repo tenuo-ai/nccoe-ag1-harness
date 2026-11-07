@@ -25,7 +25,8 @@ structured offline artifact should report that architectural alternative instead
 opaque bytes form a locally verifiable chain.
 
 A check skipped because of a declared mode is reported as *not applicable* and is never counted as
-met; the declared values are validated against the lists above.
+met. The report counts these checks, and a step with no other checks is not met. The declared values
+are validated against the lists above.
 
 ## Interface
 
@@ -46,8 +47,8 @@ Arguments not listed for a tool must be refused.
 | `new_principal(name, trust_domain)` | all | Create a party with a public identifier (`public_id`) and declared trust domain |
 | `issue(issuer, holder, caps, ttl, task, gate)` | all | Issue a root grant; with `gate`, require a signed approval from one of `gate.approvers` for the listed tools |
 | `delegate(parent, parent_holder, child, caps, ttl, terminal)` | AG-1.4, 1.9 | Obtain a child authorized by the parent holder, either locally or through an authorization server; raise `DelegationRejected` if it widens authority or exceeds depth. A longer lifetime may be rejected or clamped |
-| `prove(chain, holder, tool, args)` | AG-1.3 | Proof bound to the holder's key, the tool, and the exact arguments |
-| `approve(approver, grant, holder, tool, args)` | AG-1.6 | Approval bound to this exact request |
+| `prove(chain, holder, tool, args, at=None)` | AG-1.3, 1.6 | Proof bound to the holder's key, the tool, and the exact arguments, made at time `at` (default now) |
+| `approve(approver, grant, holder, tool, args, ttl=None)` | AG-1.6 | Approval bound to this exact request, valid for `ttl` seconds |
 | `verifier(trusted_root).authorize(...)` | all | Raise `Denied` unless authorized; check proof over the signed arguments and constraints over the normalized ones; use only the trusted root; refuse an identical request already authorized and an approval already used |
 | `verifier(...).verify_chain(chain, as_of=None)` | AG-1.8, 1.9 | Verify every link back to the root without a tool check; must accept `as_of`, and use that signed authorization time when it is supplied, otherwise the current time |
 | `verifier(...).install_revocation(issuer, grants)` | AG-1.7 | Make the grants, and everything delegated from them, fail |
@@ -56,6 +57,17 @@ Arguments not listed for a tool must be refused.
 | `expires_at(grant)` | AG-1.4 | Expiry as a Unix timestamp |
 | `encode_chain` / `decode_chain` | AG-1.8 | Portable chain encoding carried in evidence records |
 | `to_bytes` / `from_bytes` / `signed_content` | AG-1.9 | Serialization, and the bytes a signature covers |
+
+A chain is a list of links, root first. An authorization-server adapter returns one link per exchange.
+`GrantInfo.issuer` is whoever signed the link, so it may be the server on every link.
+
+These are optional:
+
+| Member | Used by | Effect |
+| :- | :- | :- |
+| `forge_link(parent, signer, child, caps, ttl, terminal=False)` | AG-1.4, 1.9 | Build a link claiming to extend `parent`, signed by `signer`, without any delegation check, so the step can present it to the enforcement point. Without it, those checks are reported as not applicable |
+| `denial_reasons` | all | Maps each kind of denial the steps name (`constraint`, `tool`, `proof`, `replay`, `root`, `chain`, `approval_missing`, `approval`, `approval_reuse`, `expired`, `revoked`) to the reasons this implementation gives. A row then fails if a request is denied for a different reason |
+| `notes` | all | Maps a step ID to a sentence about this implementation, added to that step's comments |
 
 An implementation that verifies online (for example, by introspection) can still be evaluated: its
 verifier calls the authorization server inside `authorize`. Its evidence should identify the
@@ -75,8 +87,8 @@ are separate services. The harness then also needs:
 | `revocation(issuer, grants, version)` | A revocation list signed by `issuer`, cumulative, with an increasing version |
 | `verifier(...).apply_revocation(data)` | Install a list produced by `revocation`, refusing one not signed by the trusted root |
 
-An adapter without them still runs in-process. `tests/test_compose_loopback.py` runs every step
-across separate HTTP services on localhost, so an adapter can be checked without Docker.
+An adapter without them still runs in-process. With them, `AG1_ADAPTER=... pytest tests/test_compose_loopback.py`
+runs every step across separate HTTP services on localhost, without Docker.
 
 ## Running
 
@@ -87,4 +99,8 @@ python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 AG1_ADAPTER=mypackage.my_adapter:MyAdapter pytest -q
 ```
 
-`src/ag1/adapters/tenuo_adapter.py` is a complete example in about 250 lines.
+`tests/test_ag1.py` and `tests/test_compose_loopback.py` use `AG1_ADAPTER`. `tests/test_adversarial.py`
+is specific to Tenuo.
+
+`src/ag1/adapters/tenuo_adapter.py` is a complete example in about 300 lines. `tests/reference_adapter.py`
+is a smaller one with no Tenuo code.

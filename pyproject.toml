@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools==82.0.0"]
+requires = ["setuptools==84.1.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "nccoe-ag1-harness"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reproducible harness for the AG-1 agent authorization scenario proposed for NIST NCCoE DevSecOps Example Implementation 3"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,4 +26,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

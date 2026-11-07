@@ -39,7 +39,7 @@ Needs Docker Compose:
 
 ```bash
 scripts/compose-up.sh            # Forgejo, its two tokens as Docker secrets, then every service
-docker compose run --rm driver   # writes results-compose/ and prints the anchors
+GITHUB_SHA=$(git rev-parse HEAD) docker compose run --rm driver   # writes results-compose/ and prints the anchors
 docker compose down -v
 ```
 
@@ -65,7 +65,8 @@ Expected Outcome, Observed Outcome, Comments) and adds an explicit result column
   evidence records, authorization chains, trusted root, evidence public key, and terminal hash. Every
   allowed record's chain must re-verify; a denied record may carry an invalid chain, since that is
   why it was denied;
-- `manifest.json`: the harness commit, platform, Python version, and installed package versions.
+- `manifest.json`: the harness commit, the CI workflow run if there is one, platform, Python version,
+  and installed package versions. The commit and run also appear at the top of `results.md`.
 
 Evidence chains are checked at the signed time each record's authorization was checked, so later
 grant expiry does not invalidate an authentic record. This audit check does not authorize new
@@ -78,8 +79,9 @@ the run prints: the trusted root and the evidence signing key. Take them from so
 bundle's author cannot rewrite later, such as the CI log of the run or a key published by the
 operator. `--verify` will not read them from the bundle: anyone able to edit the bundle could
 re-sign every record with keys of their own and it would still be internally consistent. The
-check shows the bundle was not altered after the run; it cannot show that the run itself was
-honest.
+check shows the bundle matches its signed checkpoint. It does not show that the run itself was
+honest, and it does not detect a rollback to an earlier checkpoint or re-signing with the evidence
+key. Those need a head anchored elsewhere.
 
 ## Dependencies
 
@@ -88,7 +90,6 @@ from the one tested. Regenerate it with
 `uv pip compile requirements.in --generate-hashes --universal --python-version 3.10 -o requirements-lock.txt`.
 
 ## Container
-
 
 ```bash
 docker build -t nccoe-ag1-harness .

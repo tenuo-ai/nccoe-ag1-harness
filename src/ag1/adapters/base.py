@@ -74,8 +74,8 @@ class Adapter(Protocol):
         a requested lifetime to the parent's.
         """
 
-    def prove(self, chain: list, holder: Principal, tool: str, args: dict) -> Any:
-        """Proof that `holder` presents this request, bound to `tool` and `args`."""
+    def prove(self, chain: list, holder: Principal, tool: str, args: dict, at: int | None = None) -> Any:
+        """Proof that `holder` presents this request, bound to `tool` and `args`, made at time `at` (default now)."""
 
     def approve(self, approver: Principal, grant: Any, holder: Principal, tool: str, args: dict,
                 ttl: int | None = None) -> Any:

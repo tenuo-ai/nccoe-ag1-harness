@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote
 
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -43,8 +44,8 @@ class Request:
     args: dict
     proof: Any
     approvals: list | None = None
-    # What the scenario intends this call to be. Used only for the utility
-    # measures; the enforcement point never sees or uses it.
+    # What the scenario intends this call to be, for the utility measures. Enforcement
+    # ignores it. Records carry it, and `actor`, as labels the caller supplied.
     intent: str = "legit"
 
 
@@ -66,6 +67,24 @@ GENESIS = "0" * 64
 
 def record_payload(body: dict) -> bytes:
     return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def chain_head(records: list[dict]) -> str:
+    """The hash a log's next record would link to."""
+    head = GENESIS
+    for item in records:
+        head = hashlib.sha256(record_payload(item["record"]) + bytes.fromhex(item["signature"])).hexdigest()
+    return head
+
+
+def checkpoint_covers(signed: dict, public_key: Ed25519PublicKey, records: list[dict]) -> bool:
+    """Whether a signed checkpoint matches exactly these records."""
+    body = signed["checkpoint"]
+    try:
+        public_key.verify(bytes.fromhex(signed["signature"]), record_payload(body))
+    except InvalidSignature:
+        return False
+    return body.get("records") == len(records) and body.get("terminal_hash") == chain_head(records)
 
 
 def audit_time(body: dict) -> int:
@@ -145,6 +164,9 @@ class EnforcementPoint:
                 "header": header or {}}
         return {"checkpoint": body, "signature": self._signer.sign(record_payload(body)).hex()}
 
+    def signed_checkpoint(self) -> dict:
+        return self.checkpoint()
+
     # Normalization (Comment 3): constraints are evaluated on the form the
     # tool will execute, not on the string the agent sent.
     def normalize(self, tool: str, args: dict) -> dict:
@@ -155,7 +177,7 @@ class EnforcementPoint:
                 if key in out and out[key] != value:
                     raise NormalizationError(f"--{key} conflicts with an explicit argument")
                 out[key] = value
-        for key in ("repo", "branch", "head", "base", "suite", "artifact"):
+        for key in ("repo", "branch", "head", "base", "suite", "artifact", "content"):
             if key in out and not isinstance(out[key], str):
                 raise NormalizationError(f"{key} must be a string, not {type(out[key]).__name__}")
         if "repo" in out:
@@ -197,26 +219,22 @@ class EnforcementPoint:
                 raise NormalizationError(f"look-alike separator U+{ord(ch):04X} in path")
             if ch in "∕⁄⧸／﹨＼":
                 raise NormalizationError(f"look-alike separator U+{ord(ch):04X} in path")
-        if not decoded.startswith("/"):
-            decoded = "/" + decoded
-        canonical = posixpath.normpath(decoded)
+        # POSIX keeps exactly two leading slashes, so normpath alone would leave them.
+        canonical = posixpath.normpath("/" + decoded.lstrip("/"))
         return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
         checked_at = int(time.time())
         try:
             canonical = self.normalize(req.tool, req.args)
-        except (NormalizationError, ServiceError) as exc:
-            decision = Decision(False, f"NormalizationError: {exc}", {})
-            self._record(req, decision, checked_at)
-            return decision
+        except NormalizationError as exc:
+            return self.refuse(req, f"NormalizationError: {exc}", checked_at)
+        except ServiceError as exc:
+            return self.refuse(req, f"ServiceError: {exc}", checked_at)
 
         if not self.enforce:
             # Baseline for comparison: the service acts on its own credential.
-            decision = Decision(True, "ambient service credential", canonical,
-                                self.scm.execute(req.tool, canonical))
-            self._record(req, decision, checked_at)
-            return decision
+            return self._execute(req, canonical, "ambient service credential", checked_at)
 
         try:
             # An unconfigured gateway accepts only requests without an audience;
@@ -235,7 +253,22 @@ class EnforcementPoint:
             self._record(req, decision, checked_at)
             return decision
 
-        decision = Decision(True, "authorized", canonical, self.scm.execute(req.tool, canonical))
+        return self._execute(req, canonical, "authorized", checked_at)
+
+    def refuse(self, req: Request, reason: str, checked_at: int | None = None) -> Decision:
+        """Refuse and record a request that never reached a verifier."""
+        decision = Decision(False, reason, {})
+        self._record(req, decision, int(time.time()) if checked_at is None else checked_at)
+        return decision
+
+    def _execute(self, req: Request, canonical: dict, reason: str, checked_at: int) -> Decision:
+        try:
+            result = self.scm.execute(req.tool, canonical)
+        except Exception as exc:
+            # The service may have acted before failing, so the record comes first.
+            self._record(req, Decision(True, reason, canonical, f"execution failed: {type(exc).__name__}"), checked_at)
+            raise
+        decision = Decision(True, reason, canonical, result)
         self._record(req, decision, checked_at)
         return decision
 

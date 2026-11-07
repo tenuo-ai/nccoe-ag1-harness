@@ -26,6 +26,8 @@ def test_step_meets_expected_outcome(step):
 def test_utility_run():
     u = utility_run(ADAPTER)
     assert u["workflow_completed"]
+    assert u["tests_passed"] is None  # the in-memory service records test requests and runs nothing
+    assert u["tasks_within_initial_grant"] == "4/5" and u["requests_for_additional_authority"] == 1
     assert u["mistaken_denials"] == 0
     assert u["additional_authority_granted"]
 
@@ -159,6 +161,26 @@ def test_inapplicable_check_is_not_counted_as_met():
     assert "NOT APPLICABLE" in report._observed(r)
     r.fact("failing check", "ok", "bad", False)
     assert not r.passed
+
+
+def test_step_with_only_inapplicable_checks_is_not_met():
+    r = StepResult("X", "t", "e")
+    r.inapplicable("mutation check", "rejected", "opaque artifact")
+    assert not r.passed
+    assert "| Not applicable |" in report.to_markdown([r], {}, ADAPTER, evidence_run(ADAPTER).scm)
+
+
+def test_report_counts_inapplicable_checks_and_names_the_commit(monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "tenuo-ai/nccoe-ag1-harness")
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    r = StepResult("X", "t", "e")
+    r.fact("real check", "ok", "ok", True)
+    r.inapplicable("mutation check", "rejected", "opaque artifact")
+    text = report.to_markdown([r], {"tests_passed": None}, ADAPTER, evidence_run(ADAPTER).scm)
+    assert "1 of 1 steps met their expected outcome. 1 checks were not applicable." in text
+    assert "`abc123`" in text and "/tenuo-ai/nccoe-ag1-harness/actions/runs/7" in text
+    assert "| Test suites passed | not run by this service |" in text
 
 
 @pytest.mark.parametrize("argv,expected", [

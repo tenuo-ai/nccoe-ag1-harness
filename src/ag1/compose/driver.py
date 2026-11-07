@@ -4,7 +4,8 @@
 the key holder that holds the signer's key; the driver holds grants, proofs and
 approvals (what an observer of the traffic could hold) and no private keys.
 `RemoteGateway` sends each request from the presenting party's own container to an
-enforcement point, and reads that enforcement point's evidence back.
+enforcement point, and reads that enforcement point's evidence back. The unenforced
+baseline is the exception: only the driver can reach it.
 """
 
 from __future__ import annotations
@@ -83,8 +84,13 @@ class RemoteAdapter:
                 raise DelegationRejected(exc.body.get("error", "")) from None
             raise
 
-    def prove(self, chain, holder, tool, args):
-        found = call(f"{holder.host}/prove", {"holder": holder.public_id, "tool": tool, "args": args,
+    def forge_link(self, parent, signer, child, caps, ttl, terminal=False):
+        return self._grant(f"{signer.host}/forge", {
+            "signer": signer.public_id, "parent": b64(self.inner.to_bytes(parent)),
+            "child": party(child), "caps": caps_to_json(caps), "ttl": ttl, "terminal": terminal})
+
+    def prove(self, chain, holder, tool, args, at=None):
+        found = call(f"{holder.host}/prove", {"holder": holder.public_id, "tool": tool, "args": args, "at": at,
                                               "chain": self.inner.encode_chain(chain) if chain else None})
         return self.inner.proof_from_bytes(unb64(found["proof"]))
 
@@ -105,12 +111,17 @@ class RemoteGateway:
         self.adapter = adapter
 
     def handle(self, req):
+        body = request_to_json(self.adapter.inner, req)
+        if self.name == "baseline":
+            return decision_from_json(call(f"{self.url}/handle", body))
         host = self.adapter.host_for(req.actor)
-        found = call(f"{host}/send", {"pep": self.name, "request": request_to_json(self.adapter.inner, req)})
-        return decision_from_json(found)
+        return decision_from_json(call(f"{host}/send", {"pep": self.name, "request": body}))
 
     def bundle(self) -> dict:
         return call(f"{self.url}/evidence")
+
+    def signed_checkpoint(self) -> dict:
+        return self.bundle()["checkpoint"]
 
     @property
     def evidence(self) -> list[dict]:
