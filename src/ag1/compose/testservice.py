@@ -1,6 +1,6 @@
 """Runs a repository's pytest suite at a branch, with a read-only token.
 
-Its network reaches Forgejo and nothing else. The suite name was authorized by the
+Its network reaches Forgejo and the enforcement points that call it, not the agents. The suite name was authorized by the
 enforcement point; it is checked again here before it becomes part of a path.
 """
 

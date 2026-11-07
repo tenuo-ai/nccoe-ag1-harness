@@ -28,18 +28,20 @@ HOLDERS = {
 }
 
 
-def _stub_tests():
+def _stub_tests(state):
     runs = []
 
     def run(body):
-        runs.append(dict(body))
-        return {**body, "passed": True, "summary": "stub"}
+        record = {**body, "passed": state["passed"], "summary": "stub"}
+        runs.append(record)
+        return record
     return {"GET /runs": lambda _: {"runs": list(runs)}, "POST /run": run}
 
 
 @pytest.fixture(scope="module")
 def topology():
     servers = []
+    test_state = {"passed": True}
 
     def start(routes):
         server, url = serve_in_thread(routes)
@@ -48,7 +50,7 @@ def topology():
 
     peps: dict[str, str] = {}
     keyholders = {name: start(keyholder.routes(load("tenuo"), ids, peps)) for name, ids in HOLDERS.items()}
-    sink_url, test_url = start(sink.routes()), start(_stub_tests())
+    sink_url, test_url = start(sink.routes()), start(_stub_tests(test_state))
     mock = MockSCM()
     issuer = scenario_identity(keyholders["issuer"], "task-authorization-system")
     origin = scenario_identity(keyholders["orchestrator"], "orchestrator")
@@ -69,7 +71,7 @@ def topology():
         return mock
 
     scenario.use_deployment(deployment(ComposeConfig(keyholders, dict(peps), test_url, sink_url, fresh)))
-    yield {"peps": peps, "issuer": issuer}
+    yield {"peps": peps, "issuer": issuer, "tests": test_state}
     scenario.use_deployment(None)
     for server in servers:
         server.shutdown()
@@ -89,7 +91,17 @@ def test_step_meets_expected_outcome_across_services(topology, step):
 
 def test_utility_run_across_services(topology):
     u = utility_run()
-    assert u["workflow_completed"] and u["mistaken_denials"] == 0
+    assert u["workflow_completed"] and u["tests_passed"] and u["mistaken_denials"] == 0
+
+
+def test_failed_tests_do_not_count_as_a_completed_workflow(topology):
+    topology["tests"]["passed"] = False
+    try:
+        u = utility_run()
+    finally:
+        topology["tests"]["passed"] = True
+    assert not u["tests_passed"] and not u["workflow_completed"]
+    assert u["mistaken_denials"] == 0  # authorization still allowed every run
 
 
 def test_driver_holds_no_private_keys(topology):

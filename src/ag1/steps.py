@@ -630,6 +630,7 @@ def utility_run(adapter=None) -> dict:
     w = build_world(adapter)
     a = w.adapter
     t0 = time.perf_counter()
+    runs_before = len(w.scm.test_runs)
     base = {"repo": REPO, "branch": FIX_BRANCH}
     w.call(w.orchestrator, "repo.read", {"repo": REPO})
     w.call(w.patch_agent, "repo.write", PATCH)
@@ -654,11 +655,15 @@ def utility_run(adapter=None) -> dict:
     records = [e["record"] for e in w.records()]
     legit = [x for x in records if x["intent"] == "legit"]
     mistaken = [x for x in legit if x["decision"] == "denied"]
+    # Authorized is not the same as passed. Only a service that really runs suites reports a result.
+    runs = w.scm.test_runs[runs_before:]
+    tests_passed = len(runs) == len(tests) and all(run.get("passed", True) for run in runs)
     tasks = {"read repository": True, "write patch": True, "run unit and parser tests": True,
              "run integration tests": first.allowed, "open pull request": True}
     return {
         "workflow_completed": all(x["decision"] == "allowed" for x in legit) and stepped.allowed
-                              and bool(w.scm.pull_requests()),
+                              and bool(w.scm.pull_requests()) and tests_passed,
+        "tests_passed": tests_passed,
         "tasks_within_initial_grant": f"{sum(tasks.values())}/{len(tasks)}",
         "requests_for_additional_authority": 1,
         "additional_authority_granted": stepped.allowed,

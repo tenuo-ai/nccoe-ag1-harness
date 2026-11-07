@@ -1,15 +1,29 @@
 # AG-1 agent authorization harness
 
 A reproducible test of task-scoped authorization for AI agents in a software factory. It runs the
-AG-1 scenario that Tenuo proposed in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the NIST NCCoE *Secure Software Development,
-Security, and Operations (DevSecOps) Practices* live document, for Example Implementation 3
-(agentic AI developing, building, and testing code).
+AG-1 scenario that Tenuo proposed in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the
+NIST NCCoE *Secure Software Development, Security, and Operations (DevSecOps) Practices* live
+document, for Example Implementation 3 (agentic AI developing, building, and testing code).
 
 The harness tests requirements, not a product. Implementations plug in through an adapter
 ([ADAPTERS.md](ADAPTERS.md)); a Tenuo adapter is included.
 
 > **Independent proposal.** This repository is a Tenuo contribution and implementation aid. AG-1
 > has not been adopted or endorsed by NIST or the NCCoE.
+
+## Quick start
+
+```bash
+git clone https://github.com/tenuo-ai/nccoe-ag1-harness.git && cd nccoe-ag1-harness
+python -m venv .venv
+.venv/bin/pip install --require-hashes -r requirements-lock.txt
+.venv/bin/pip install --no-deps --no-build-isolation -e .
+.venv/bin/python -m ag1 --out results
+```
+
+The in-memory run takes about ten seconds and prints one line per step. To see the output first,
+[sample results](docs/sample-results.md) come from a CI run with every party in its own container
+and a real Forgejo. [Run](#run) covers those modes and how to verify the evidence.
 
 ## The problem
 
@@ -118,8 +132,9 @@ the same state. Test runs and deployments are still recorded by the harness in t
  Forgejo (admin token) · test service (read-only token, runs the repository's pytest suites) · staging sink
 ```
 
-- Private keys never leave their key holder. The driver that runs the steps holds only grants,
-  proofs and approvals, which is what an observer of the traffic could hold.
+- Private keys never leave their key holder. The driver that runs the steps holds grants, proofs and
+  approvals, which is what an observer of the traffic could hold, plus a Forgejo admin token it uses
+  to reset and inspect repositories.
 - A copied chain in AG-1.3 is presented from the thief's container, which does not hold the key.
 - Revocation in AG-1.7 is signed by the issuer and pushed to all four enforcement points.
 - The test service checks out the branch and runs real `unit`, `parser` and `integration` suites.
@@ -275,10 +290,10 @@ These came from attacking the harness, not from the ten steps as first written.
 - **The forge resolves paths itself.** Given `src/parser/../../.github/workflows/release.yml`, Forgejo
   writes `.github/workflows/release.yml`, and with the admin token it does so on protected `main`.
   Its API refuses reads and writes through the `src/parser/ci` symbolic link, but a git checkout of
-  the branch, as a build or test runner makes, follows it. A policy checked on the string the agent sent would therefore approve a different file from the
-  one the forge changes. The enforcement point checks and forwards the canonical form, and repository
-  names the forge might rewrite (a `.git` suffix, look-alike characters) are refused rather than
-  resolved.
+  the branch, as a build or test runner makes, follows it. A policy checked on the string the agent
+  sent would therefore approve a different file from the one the forge changes. The enforcement point
+  checks and forwards the canonical form, and repository names the forge might rewrite (a `.git`
+  suffix, look-alike characters) are refused rather than resolved.
 - **Evidence deletion.** Signed records alone do not reveal a missing record. Records are now
   hash-linked, so a deletion or reordering breaks the chain, and a signed checkpoint over the record
   count and latest hash, checked against the evidence key held outside the bundle, catches deleted
@@ -306,6 +321,11 @@ come from that change:
 - In compose mode, containers share the host's clock and talk plain HTTP inside internal Docker
   networks, without mutual TLS or workload identity. An enforcement point knows the domain labels of
   the issuer and the orchestrator from its configuration; other parties are recorded as `unknown`.
+- Compose mode separates keys and traffic, but does not authenticate callers on its internal networks.
+  A key holder signs for any caller that can reach it, and the unenforced baseline accepts any request
+  from the test network. The agents are scripted and the test suites come from the seed repository, so
+  neither path is used here. A deployment with live agents or untrusted test code needs authenticated
+  control interfaces and a separate baseline.
 - Normalization, the reference enforcement point, and evidence signing are harness components, not
   claims about the adapter. Every report identifies this responsibility split.
 - Revocation is pushed to every enforcement point in the deployment, synchronously; delayed or

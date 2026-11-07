@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     print("record these anchors outside the results directory; the bundle cannot vouch for itself")
     print(f"anchors: {anchors}")
     print(f"verify with: {parser.prog} --adapter {args.adapter} --verify {args.out} {anchors}")
-    return 0 if all(r.passed for r in results) and utility["mistaken_denials"] == 0 else 1
+    return 0 if all(r.passed for r in results) and utility["mistaken_denials"] == 0 and utility["workflow_completed"] else 1
 
 
 def _compose_deployment():
