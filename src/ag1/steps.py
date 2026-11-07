@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 
 from cryptography.exceptions import InvalidSignature
 
-from .adapters.base import Adapter
-from .gateway import GENESIS, Request, record_payload
+from .adapters.base import Adapter, require_audit_time
+from .gateway import GENESIS, Request, audit_time, record_payload
 from .scenario import (
     ARTIFACT,
     ARTIFACT_NEXT,
@@ -407,6 +407,7 @@ def verify_evidence(records: list[dict], public_key, adapter: Adapter, issuer) -
     """
     pub = public_key
     verifier = adapter.verifier(issuer.public_id if hasattr(issuer, "public_id") else issuer)
+    require_audit_time(verifier)
     out = []
     expected_prev = GENESIS
     for item in records:
@@ -423,7 +424,7 @@ def verify_evidence(records: list[dict], public_key, adapter: Adapter, issuer) -
         chain_ok = None
         if body["authorization_chain"]:
             try:
-                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]))
+                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=audit_time(body))
                 chain_ok = True
             except Exception as exc:
                 chain_ok = type(exc).__name__

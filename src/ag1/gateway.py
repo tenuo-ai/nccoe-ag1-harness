@@ -67,6 +67,12 @@ GENESIS = "0" * 64
 def record_payload(body: dict) -> bytes:
     return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
 
+
+def audit_time(body: dict) -> int:
+    """When authority was checked; a tool call can outlast its grant. Earlier bundles only have `time`."""
+    return body.get("checked_at", body["time"])
+
+
 _FLAG = re.compile(r"^--([a-z][a-z0-9-]*)(?:=(.*))?$")
 _SHELL_OPERATORS = set(";|&`$<>()")
 
@@ -197,18 +203,19 @@ class EnforcementPoint:
         return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
+        checked_at = int(time.time())
         try:
             canonical = self.normalize(req.tool, req.args)
         except (NormalizationError, ServiceError) as exc:
             decision = Decision(False, f"NormalizationError: {exc}", {})
-            self._record(req, decision)
+            self._record(req, decision, checked_at)
             return decision
 
         if not self.enforce:
             # Baseline for comparison: the service acts on its own credential.
             decision = Decision(True, "ambient service credential", canonical,
                                 self.scm.execute(req.tool, canonical))
-            self._record(req, decision)
+            self._record(req, decision, checked_at)
             return decision
 
         try:
@@ -225,14 +232,14 @@ class EnforcementPoint:
                     raise Denied("OriginatingPrincipalUntrusted: root holder is not trusted")
         except Denied as exc:
             decision = Decision(False, str(exc), canonical)
-            self._record(req, decision)
+            self._record(req, decision, checked_at)
             return decision
 
         decision = Decision(True, "authorized", canonical, self.scm.execute(req.tool, canonical))
-        self._record(req, decision)
+        self._record(req, decision, checked_at)
         return decision
 
-    def _record(self, req: Request, decision: Decision) -> None:
+    def _record(self, req: Request, decision: Decision, checked_at: int) -> None:
         links = [vars(self.adapter.info(g)) for g in req.chain]
         approvals = []
         for a in req.approvals or []:
@@ -243,6 +250,7 @@ class EnforcementPoint:
         body = {
             "seq": len(self.evidence) + 1,
             "time": int(time.time()),
+            "checked_at": checked_at,
             "actor": req.actor,
             "tool": req.tool,
             "requested_args": req.args,

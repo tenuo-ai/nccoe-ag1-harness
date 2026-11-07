@@ -247,6 +247,10 @@ Expected Outcome, Observed Outcome, Comments) and adds an explicit result column
   why it was denied;
 - `manifest.json`: the harness commit, platform, Python version, and installed package versions.
 
+Evidence chains are checked at the signed time each record's authorization was checked, so later
+grant expiry does not invalidate an authentic record. This audit check does not authorize new
+execution.
+
 The evidence bundle can be checked after the original process has exited, against two anchors
 the run prints: the trusted root and the evidence signing key. Take them from somewhere the
 bundle's author cannot rewrite later, such as the CI log of the run or a key published by the

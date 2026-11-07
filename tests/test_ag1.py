@@ -230,3 +230,68 @@ def test_incomplete_workflow_fails_the_run(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "STEPS", [])
     monkeypatch.setattr(cli, "utility_run", lambda adapter: {"mistaken_denials": 0, "workflow_completed": False})
     assert main(["--out", str(tmp_path)]) == 1
+
+
+def test_historical_bundle_survives_expiry_but_live_authorization_does_not(tmp_path):
+    import time
+    from ag1.scenario import REPO, build_world
+    from ag1.spec import Exact
+    from ag1.steps import verify_evidence
+
+    world = build_world(ADAPTER)
+    holder = ADAPTER.new_principal("short-lived-reader")
+    grant = ADAPTER.issue(world.issuer, holder, {"repo.read": {"repo": Exact(REPO)}}, ttl=2)
+    agent = world.agent(holder, [grant])
+    assert world.call(agent, "repo.read", {"repo": REPO}).allowed
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
+    assert report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))["valid"]
+    time.sleep(3.2)
+    assert report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))["valid"]
+    assert verify_evidence(world.gateway.evidence, world.gateway.evidence_public_key,
+                           ADAPTER, world.issuer)[0]["chain"] is True
+    assert not world.call(agent, "repo.read", {"repo": REPO}).allowed
+    verifier = ADAPTER.verifier(world.issuer)
+    with pytest.raises(Exception):
+        verifier.verify_chain([grant])
+    with pytest.raises(Exception):
+        verifier.verify_chain([grant], as_of=int(ADAPTER.expires_at(grant)) + 3)
+    alien = ADAPTER.verifier(ADAPTER.new_principal("untrusted-root"))
+    with pytest.raises(Exception):
+        alien.verify_chain([grant], as_of=world.gateway.evidence[0]["record"]["checked_at"])
+
+
+def test_tool_call_outlasting_its_grant_still_verifies(tmp_path, monkeypatch):
+    import time
+    from ag1.scenario import REPO, build_world
+    from ag1.spec import Exact
+
+    world = build_world(ADAPTER)
+    holder = ADAPTER.new_principal("slow-reader")
+    grant = ADAPTER.issue(world.issuer, holder, {"repo.read": {"repo": Exact(REPO)}}, ttl=2)
+    execute = world.gateway.scm.execute
+
+    def slow(tool, args):
+        time.sleep(3.2)
+        return execute(tool, args)
+
+    monkeypatch.setattr(world.gateway.scm, "execute", slow)
+    assert world.call(world.agent(holder, [grant]), "repo.read", {"repo": REPO}).allowed
+    record = world.gateway.evidence[-1]["record"]
+    assert record["checked_at"] < int(ADAPTER.expires_at(grant)) <= record["time"]
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
+    assert report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))["valid"]
+
+
+def test_verifier_without_as_of_is_a_clear_error(tmp_path, monkeypatch):
+    from ag1.adapters.tenuo_adapter import TenuoVerifier
+    from ag1.scenario import build_world
+
+    class OldSignature(TenuoVerifier):
+        def verify_chain(self, chain):
+            return None
+
+    world = build_world(ADAPTER)
+    report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
+    monkeypatch.setattr(ADAPTER, "verifier", OldSignature)
+    result = report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))
+    assert not result["valid"] and "must accept as_of" in result["error"]
