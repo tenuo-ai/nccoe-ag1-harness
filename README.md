@@ -1,10 +1,9 @@
 # AG-1: a test harness for AI agent authorization
 
-**An agent is told to fix a bug. An injected instruction tells it to rewrite the release workflow.
-Does the system stop it?**
-
-AG-1 tests whether authorization controls hold when an AI agent is compromised. It is for anyone
-building or evaluating those controls for software development agents.
+AG-1 tests whether authorization controls hold when an AI agent is compromised. In its scenario, an
+agent assigned to fix a vulnerability receives an injected instruction to rewrite the release
+workflow, and the harness checks that the action is refused before it runs. It is intended for
+anyone building or evaluating these controls for software development agents.
 
 Each task gets a *grant*: short-lived authority limited to the tools, repositories, branches and
 paths that task needs. Before each tool call runs, an *enforcement point* checks it against the
