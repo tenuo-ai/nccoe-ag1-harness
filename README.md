@@ -35,7 +35,7 @@ sometimes reading secrets or deploying.
 That is tolerable when a person decides each action. It is not when the agent's next action can be
 decided by text it reads. An issue, a pull request description, a dependency's README, or a tool
 response can instruct the agent, and whatever the agent is told to do is carried out with the full
-credential. Public incidents in 2026 followed exactly this pattern in
+credential. Public disclosures in 2026 showed this pattern in
 [GitHub Agentic Workflows](https://www.securityweek.com/critical-vulnerability-exposes-github-agentic-workflows-to-prompt-injection/),
 [Cline's triage workflow](https://snyk.io/blog/cline-supply-chain-attack-prompt-injection-github-actions/),
 [Google's Gemini CLI triage workflow](https://www.pillar.security/blog/my-agentic-trust-issues-from-prompt-injection-to-supply-chain-compromise-on-gemini-cli),
