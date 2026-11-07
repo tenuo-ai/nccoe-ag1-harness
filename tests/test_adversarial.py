@@ -299,3 +299,23 @@ def test_approval_single_use_needs_its_own_check():
     world = build_world(adapter_with(NoApprovalSingleUse))
     with pytest.raises(AssertionError):
         test_approval_cannot_be_reused_with_a_fresh_proof(world)
+
+
+def test_targeted_request_cannot_be_replayed_at_main(world):
+    from ag1.scenario import TEST_AUDIENCE, cross_domain_test_caps
+
+    a = world.adapter
+    grant = a.issue(world.issuer, world.orchestrator.principal,
+                    {"test.run": cross_domain_test_caps()}, ttl=60)
+    agent = world.agent(world.orchestrator.principal, [grant])
+    req = agent.request("test.run", {"repo": REPO, "branch": FIX_BRANCH,
+                                     "suite": "unit", "audience": TEST_AUDIENCE})
+    assert world.receiving.handle(req).allowed
+    runs = len(world.scm.test_runs)
+    denied = world.gateway.handle(req)
+    assert not denied.allowed
+    assert "AudienceMismatch" in denied.reason
+    assert len(world.scm.test_runs) == runs
+    # Ordinary local requests remain usable.
+    assert world.call(world.test_runner, "test.run",
+                      {"repo": REPO, "branch": FIX_BRANCH, "suite": "unit"}).allowed

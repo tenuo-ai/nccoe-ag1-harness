@@ -258,6 +258,8 @@ def ag1_04(adapter=None) -> StepResult:
     remote_args = {"repo": REPO, "branch": FIX_BRANCH, "suite": "parser", "audience": TEST_AUDIENCE}
     r.decision("receiving enforcement point accepts the narrower child from another trust domain",
                receiving.handle(remote.request("test.run", remote_args)), True)
+    r.decision("test-service request replayed at the main gateway",
+               w.gateway.handle(remote.request("test.run", remote_args, intent="attack")), False)
     r.decision("same chain names the wrong intended audience",
                receiving.handle(remote.request("test.run", {**remote_args, "audience": SCM_AUDIENCE},
                                               intent="attack")), False)
