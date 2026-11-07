@@ -76,7 +76,7 @@ def _apply(builder, caps: spec.Capabilities):
     return builder
 
 
-CLOCK_TOLERANCE_SECS = 2  # production deployments typically allow more; see README
+CLOCK_TOLERANCE_SECS = 2  # production deployments typically allow more; see docs/findings.md
 
 
 class TenuoVerifier:
