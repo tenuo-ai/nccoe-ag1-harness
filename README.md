@@ -21,11 +21,14 @@ flowchart LR
 
 **Who built this.** AG-1 is maintained by [Tenuo](https://github.com/tenuo-ai/tenuo), which makes
 open-source task-scoped authorization for AI agents. Tenuo is the first implementation tested here,
-and other implementations can be integrated through an [adapter](ADAPTERS.md).
+and other implementations can be integrated through an [adapter](ADAPTERS.md). Tenuo also authored
+[Attenuating Authorization Tokens](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
+(AAT), an individual IETF Internet-Draft for delegated authority with public test vectors. AG-1 does
+not require AAT.
 
-**Not a NIST project.** Tenuo proposed AG-1 in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf)
-on the NIST NCCoE *DevSecOps Practices* live document, for Example Implementation 3, NCCoE's planned
-demonstration of AI agents in software development. NIST and NCCoE have not adopted or endorsed it.
+**Background.** Tenuo proposed AG-1 in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the
+NIST NCCoE *DevSecOps Practices* live document, for Example Implementation 3, NCCoE's planned
+demonstration of AI agents in software development.
 
 ## The scenario
 
