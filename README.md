@@ -1,7 +1,7 @@
 # AG-1 agent authorization harness
 
 A reproducible test of task-scoped authorization for AI agents in a software factory. It runs the
-AG-1 scenario that Tenuo proposed in its comments on the NIST NCCoE *Secure Software Development,
+AG-1 scenario that Tenuo proposed in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the NIST NCCoE *Secure Software Development,
 Security, and Operations (DevSecOps) Practices* live document, for Example Implementation 3
 (agentic AI developing, building, and testing code).
 
