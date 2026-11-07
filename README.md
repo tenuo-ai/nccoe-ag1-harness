@@ -1,23 +1,34 @@
 # AG-1: a test harness for AI agent authorization
 
-**An agent is told to fix a bug. An injected instruction tells it to rewrite the release workflow.
-Does the system stop it?**
-
-AG-1 tests whether authorization controls hold when an AI agent is compromised. It is for anyone
-building or evaluating those controls for software development agents.
+AG-1 tests whether authorization controls hold when an AI agent is compromised. In its scenario, an
+agent assigned to fix a vulnerability receives an injected instruction to rewrite the release
+workflow, and the harness checks that the action is refused before it runs. It is intended for
+anyone building or evaluating these controls for software development agents.
 
 Each task gets a *grant*: short-lived authority limited to the tools, repositories, branches and
 paths that task needs. Before each tool call runs, an *enforcement point* checks it against the
 grant. AG-1's scripted agents attempt both legitimate work and deliberate violations across ten
 steps, then the harness reports each decision with signed evidence.
 
+```mermaid
+flowchart LR
+    A[Task authorization system] -->|task grant| B[AI agents]
+    B -->|tool call with grant and proof| C{Enforcement point}
+    C -->|allowed| D[Source control, tests, deployment]
+    C -->|denied| E[Refused before it runs]
+    C -->|every decision| F[Signed evidence]
+```
+
 **Who built this.** AG-1 is maintained by [Tenuo](https://github.com/tenuo-ai/tenuo), which makes
 open-source task-scoped authorization for AI agents. Tenuo is the first implementation tested here,
-and other implementations can be integrated through an [adapter](ADAPTERS.md).
+and other implementations can be integrated through an [adapter](ADAPTERS.md). Tenuo also authored
+[Attenuating Authorization Tokens](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
+(AAT), an individual IETF Internet-Draft for delegated authority with public test vectors. AG-1 does
+not require AAT.
 
-**Not a NIST project.** Tenuo proposed AG-1 in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf)
-on the NIST NCCoE *DevSecOps Practices* live document, for Example Implementation 3, NCCoE's planned
-demonstration of AI agents in software development. NIST and NCCoE have not adopted or endorsed it.
+**Background.** Tenuo proposed AG-1 in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the
+NIST NCCoE *DevSecOps Practices* live document, for Example Implementation 3, NCCoE's planned
+demonstration of AI agents in software development.
 
 ## The scenario
 

@@ -1,4 +1,4 @@
-"""Adapter for Tenuo warrants (Attenuating Authorization Tokens)."""
+"""Adapter for Tenuo warrants."""
 
 from __future__ import annotations
 
