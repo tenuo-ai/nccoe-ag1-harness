@@ -217,7 +217,7 @@ def test_mock_run_resets_a_previously_chosen_service(tmp_path, monkeypatch):
 
     scenario.use_service(unreachable)
     monkeypatch.setattr(cli, "STEPS", [])
-    monkeypatch.setattr(cli, "utility_run", lambda adapter: {"mistaken_denials": 0})
+    monkeypatch.setattr(cli, "utility_run", lambda adapter: {"mistaken_denials": 0, "workflow_completed": True})
     try:
         assert main(["--service", "mock", "--out", str(tmp_path)]) == 0
     finally:
