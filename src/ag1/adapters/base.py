@@ -39,8 +39,12 @@ class Verifier(Protocol):
         already used, must be refused.
         """
 
-    def verify_chain(self, chain: list) -> None:
-        """Raise unless every link verifies back to the trusted root (no tool check)."""
+    def verify_chain(self, chain: list, *, as_of: int | None = None) -> None:
+        """Verify every link to the trusted root; optionally at a signed event timestamp.
+
+        With no timestamp, validate against the current time. Historical verification
+        is for auditing only, never for authorizing execution.
+        """
 
     def install_revocation(self, issuer: Principal, grants: list) -> None:
         """Make `grants`, and everything delegated from them, fail from now on."""

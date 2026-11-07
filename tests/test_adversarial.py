@@ -219,7 +219,7 @@ class NoRevocation(TenuoVerifier):
 
 
 class NoChainCheck(TenuoVerifier):
-    def verify_chain(self, chain):
+    def verify_chain(self, chain, *, as_of=None):
         return None
 
 

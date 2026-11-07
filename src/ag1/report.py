@@ -240,7 +240,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         expected_prev = terminal_hash
         if body.get("authorization_chain"):
             try:
-                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]))
+                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=body["time"])
                 ok = True
             except Exception:
                 ok = False

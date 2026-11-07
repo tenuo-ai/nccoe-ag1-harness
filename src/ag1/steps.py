@@ -421,7 +421,7 @@ def verify_evidence(records: list[dict], public_key, adapter: Adapter, issuer) -
         chain_ok = None
         if body["authorization_chain"]:
             try:
-                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]))
+                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=body["time"])
                 chain_ok = True
             except Exception as exc:
                 chain_ok = type(exc).__name__

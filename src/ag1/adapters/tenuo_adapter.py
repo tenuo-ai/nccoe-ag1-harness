@@ -115,8 +115,8 @@ class TenuoVerifier:
             self._nonces.check_and_record(bytes(proof))
         self._used_approvals.update(approval_nonces)
 
-    def verify_chain(self, chain):
-        self._authorizer.verify_chain(chain)
+    def verify_chain(self, chain, *, as_of=None):
+        self._authorizer.verify_chain(chain, as_of=as_of)
 
     def install_revocation(self, issuer: TenuoPrincipal, grants):
         self._revocation_version += 1
