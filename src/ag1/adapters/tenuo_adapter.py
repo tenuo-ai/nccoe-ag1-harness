@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import time
 from dataclasses import dataclass
@@ -77,6 +78,8 @@ def _apply(builder, caps: spec.Capabilities):
 
 
 CLOCK_TOLERANCE_SECS = 2  # production deployments typically allow more; see docs/findings.md
+_SIGNATURE_CONTEXT = b"tenuo-warrant-v1"
+_PAYLOAD_MAX_DEPTH, _PAYLOAD_PARENT_HASH, _PAYLOAD_EXTENSIONS, _PAYLOAD_DEPTH = 8, 9, 10, 18
 
 
 class TenuoVerifier:
@@ -147,6 +150,25 @@ class TenuoAdapter:
         verification_mode="offline_chain",
         artifact_mode="structured_signed",
     )
+    denial_reasons = {
+        "constraint": ("ConstraintViolation",),
+        "tool": ("ToolNotAuthorized",),
+        "proof": ("SignatureInvalid", "MissingSignature"),
+        "replay": ("Replay",),
+        "root": ("UntrustedRoot",),
+        "chain": ("ChainError", "MonotonicityError", "ExactValueMismatch", "ValueNotInParentSet",
+                  "ConstraintViolation"),
+        "approval_missing": ("ApprovalGateTriggered",),
+        "approval": ("InvalidApproval",),
+        "approval_reuse": ("ApprovalReuse",),
+        "expired": ("ExpiredError",),
+        "revoked": ("RevokedError",),
+    }
+    notes = {
+        "AG-1.3": "The Tenuo adapter enables Tenuo's NonceStore for this.",
+        "AG-1.6": ("The Tenuo adapter records accepted approvals. It sets a 2s clock tolerance, which covers only "
+                   "approvals dated slightly in the future; expiry is strict."),
+    }
 
     def __init__(self) -> None:
         self._trust_domains: dict[str, str] = {}
@@ -176,8 +198,24 @@ class TenuoAdapter:
         except Exception as exc:
             raise spec.DelegationRejected(f"{type(exc).__name__}: {exc}") from exc
 
-    def prove(self, chain, holder, tool, args):
-        return bytes(chain[-1].sign(holder.key, tool, args, int(time.time())))
+    def forge_link(self, parent, signer, child, caps, ttl, terminal=False):
+        """A link claiming to extend `parent`, signed by `signer`, built without Tenuo's delegation checks."""
+        minted = _apply(Warrant.mint_builder(), caps).holder(child.public_key).ttl(ttl).mint(signer.key)
+        payload = cbor2.loads(bytes(minted.payload_bytes))
+        above = cbor2.loads(bytes(parent.payload_bytes))
+        depth = above[_PAYLOAD_DEPTH] + 1
+        payload[_PAYLOAD_DEPTH] = depth
+        payload[_PAYLOAD_MAX_DEPTH] = depth if terminal else max(above[_PAYLOAD_MAX_DEPTH], depth)
+        payload[_PAYLOAD_PARENT_HASH] = list(hashlib.sha256(bytes(parent.payload_bytes)).digest())
+        if _PAYLOAD_EXTENSIONS in above:
+            payload[_PAYLOAD_EXTENSIONS] = above[_PAYLOAD_EXTENSIONS]
+        version, _, signature = cbor2.loads(bytes(minted.to_bytes()))
+        body = cbor2.dumps(dict(sorted(payload.items())))
+        signed = signer.key.sign_raw(_SIGNATURE_CONTEXT + bytes([version]) + body)
+        return Warrant.from_bytes(cbor2.dumps([version, body, [signature[0], bytes(signed)]]))
+
+    def prove(self, chain, holder, tool, args, at=None):
+        return bytes(chain[-1].sign(holder.key, tool, args, int(time.time()) if at is None else at))
 
     def approve(self, approver, grant, holder, tool, args, ttl: int | None = None):
         request_hash = compute_request_hash(grant.id, tool, args, holder.public_key)

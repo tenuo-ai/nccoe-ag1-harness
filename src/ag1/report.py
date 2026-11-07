@@ -27,6 +27,7 @@ RESPONSIBILITIES = [
      "AG-1 scenario, or deployment configuration in compose mode; not carried in grants"),
     ("Enforcement immediately before execution", "AG-1 reference enforcement point"),
     ("Evidence signing and hash linking", "AG-1 reference enforcement point"),
+    ("Refusing a replayed request or a reused approval", "Adapter / implementation under test"),
 ]
 SERVICE_CONTROL = "SCM, CI/CD, and deployment behavior"
 
@@ -47,14 +48,26 @@ def _observed(step: StepResult) -> str:
     return "<br>".join(lines)
 
 
+def _run_url() -> str | None:
+    env = os.environ
+    if env.get("GITHUB_RUN_ID") and env.get("GITHUB_REPOSITORY"):
+        return f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}"
+    return None
+
+
 def to_markdown(steps: list[StepResult], utility: dict, adapter, service) -> str:
     when = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    not_applicable = sum(s.not_applicable for s in steps)
+    run_url = _run_url()
     out = [
         "# AG-1 Functional Demonstration Results",
         "",
         f"Run {when} against {adapter.name} {adapter.version} on Python {platform.python_version()}, "
-        f"with {service.description} as the SCM service. "
-        f"{sum(s.passed for s in steps)} of {len(steps)} steps met their expected outcome.",
+        f"using {service.description}. "
+        f"{sum(s.passed for s in steps)} of {len(steps)} steps met their expected outcome."
+        + (f" {not_applicable} checks were not applicable." if not_applicable else ""),
+        "",
+        f"Harness commit: `{_git_commit()}`." + (f" [Workflow run]({run_url})." if run_url else ""),
         "",
         "The result describes the implementation integrated with the AG-1 reference enforcement point. "
         "The responsibility table below identifies which component supplies each control.",
@@ -80,12 +93,15 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter, service) -> str
     ]
     for s in steps:
         result = "Met" if s.passed else "Not met"
-        if s.not_applicable:
+        if s.not_applicable == len(s.checks):
+            result = "Not applicable"
+        elif s.not_applicable:
             result += f" ({s.not_applicable} not applicable)"
         out.append(f"| {s.step_id} {s.title} | {s.expected_outcome} | {_observed(s)} | {result} | {s.comments} |")
     out += ["", "## Utility measures", "", "| Measure | Value |", "| :- | :- |"]
     labels = {
         "workflow_completed": "Authorized workflow completed",
+        "tests_passed": "Test suites passed",
         "tasks_within_initial_grant": "Tasks completed within the initial grant",
         "requests_for_additional_authority": "Requests for additional authority",
         "additional_authority_granted": "Additional authority granted by a new grant",
@@ -96,6 +112,8 @@ def to_markdown(steps: list[StepResult], utility: dict, adapter, service) -> str
         "test_results": "Test suites run on the patched branch",
     }
     for k, v in utility.items():
+        if k == "tests_passed" and v is None:
+            v = "not run by this service"
         out.append(f"| {labels.get(k, k)} | {v} |")
     return "\n".join(out) + "\n"
 
@@ -191,8 +209,10 @@ def verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str
 def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: str) -> dict:
     """Verify an exported evidence bundle against anchors obtained outside it.
 
-    A signed checkpoint over the final head and record count makes removing
-    trailing records (or all of them) detectable.
+    A signed checkpoint over the final head and record count detects trailing
+    records (or all of them) removed by anyone without the evidence key. An
+    earlier checkpoint still verifies against the shorter log it covered, and
+    the key's holder can re-sign; those need a head anchored elsewhere.
 
     The trusted root and the evidence signing key must come from somewhere the
     bundle's author cannot rewrite afterwards (a CI log, a published key). Keys
@@ -223,7 +243,6 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
     }
     expected_prev = GENESIS
     signatures = links = chains = denied_unverifiable = 0
-    terminal_hash = GENESIS
     for item in records:
         try:
             body = item["record"]
@@ -238,8 +257,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
             pass
         if body.get("prev") == expected_prev:
             links += 1
-        terminal_hash = hashlib.sha256(payload + signature).hexdigest()
-        expected_prev = terminal_hash
+        expected_prev = hashlib.sha256(payload + signature).hexdigest()
         if body.get("authorization_chain"):
             try:
                 verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=audit_time(body))
@@ -251,6 +269,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
             else:
                 denied_unverifiable += not ok
     count = len(records)
+    terminal_hash = expected_prev
     checkpoint_valid = False
     try:
         signed = bundle["checkpoint"]
@@ -308,6 +327,7 @@ def write(steps: list[StepResult], utility: dict, directory: Path, adapter, serv
         "schema": "ag1-run-manifest-v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "harness_commit": _git_commit(),
+        "workflow_run": _run_url(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "service": service.description,

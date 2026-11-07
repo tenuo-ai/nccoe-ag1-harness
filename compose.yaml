@@ -6,6 +6,7 @@
 #
 # Networks are internal (no internet). Agents reach enforcement points, never Forgejo;
 # the test service reaches Forgejo with a read-only token and is not on the agents' network.
+# Only the driver can send requests to the unenforced baseline.
 
 name: ag1
 
@@ -20,7 +21,7 @@ x-ag1: &ag1
   security_opt: ["no-new-privileges:true"]
   environment: &env
     PYTHONDONTWRITEBYTECODE: "1"
-    AG1_PEPS: main=http://pep-main:8000,receiving=http://pep-receiving:8000,other-service=http://pep-other:8000,baseline=http://pep-baseline:8000
+    AG1_PEPS: main=http://pep-main:8000,receiving=http://pep-receiving:8000,other-service=http://pep-other:8000
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
     interval: 2s
@@ -72,6 +73,7 @@ services:
   issuer:
     <<: *keyholder
     environment: {<<: *env, AG1_IDENTITIES: task-authorization-system@control.example}
+    networks: [agents, baseline]  # the baseline reads the trust root from it at startup
   approver: {<<: *keyholder}
   orchestrator:
     <<: *keyholder
@@ -103,7 +105,8 @@ services:
       AG1_ORIGIN_ALLOWLIST: "1"
   pep-baseline:  # enforcement off: the service acts on its own credential (AG-1.10 baseline)
     <<: *pep
-    environment: {<<: *pep-env, AG1_PEP_NAME: baseline, AG1_ENFORCE: "0"}
+    environment: {<<: *pep-env, AG1_ORIGIN_URL: "", AG1_PEP_NAME: baseline, AG1_ENFORCE: "0"}
+    networks: [baseline, scm]
 
   test-service:
     <<: *ag1
@@ -128,6 +131,11 @@ services:
     command: ["--out", "/results"]
     environment:
       <<: *env
+      AG1_PEPS: main=http://pep-main:8000,receiving=http://pep-receiving:8000,other-service=http://pep-other:8000,baseline=http://pep-baseline:8000
+      GITHUB_SHA: ${GITHUB_SHA:-}
+      GITHUB_RUN_ID: ${GITHUB_RUN_ID:-}
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-}
+      GITHUB_SERVER_URL: ${GITHUB_SERVER_URL:-}
       AG1_KEYHOLDERS: issuer=http://issuer:8000,approver=http://approver:8000,orchestrator=http://orchestrator:8000,patch-agent=http://patch-agent:8000,test-runner=http://test-runner:8000,release-agent=http://release-agent:8000,thief=http://thief:8000
       AG1_FORGEJO_URL: http://forgejo:3000
       AG1_FORGEJO_TOKEN_FILE: /run/secrets/forgejo-admin-token
@@ -135,13 +143,14 @@ services:
       AG1_SINK_URL: http://sink:8000
     secrets: [forgejo-admin-token]
     volumes: ["./results-compose:/results"]
-    networks: [agents, scm, tests]
+    networks: [agents, baseline, scm, tests]
     healthcheck: {disable: true}
 
 networks:
   agents: {internal: true}
   scm: {internal: true}
   tests: {internal: true}
+  baseline: {internal: true}
 
 secrets:
   forgejo-admin-token: {file: ./.compose-secrets/forgejo-admin-token}

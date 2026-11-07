@@ -91,6 +91,8 @@ class Gateway(Protocol):
     @property
     def evidence_public_key_hex(self) -> str: ...
 
+    def signed_checkpoint(self) -> dict: ...
+
 
 @dataclass
 class World:
@@ -112,6 +114,7 @@ class World:
     # Evidence records each gateway held when this world was built; a separately
     # deployed enforcement point keeps one log for the whole run.
     evidence_start: dict = field(default_factory=dict)
+    remote_runner: Principal | None = None  # set by the evidence run, for AG-1.8
 
     @property
     def gateways(self) -> list[Gateway]:
@@ -129,7 +132,7 @@ class World:
         return gateway.evidence[self.evidence_start.get(gateway.name, 0):]
 
     def revoke(self, grants: list) -> dict:
-        """Revoke `grants` at every enforcement point; returns propagation time and reach."""
+        """Revoke `grants` at every enforcing point; returns delivery time and reach."""
         return self.revoke_at(grants)
 
     def issue_task(self, holder: Principal, suites=SUITES):
@@ -180,9 +183,10 @@ def local_deployment(adapter: Adapter) -> dict:
 
     def revoke(grants: list) -> dict:
         t0 = time.perf_counter()
-        for g in gateways.values():
+        enforcing = [g for g in gateways.values() if g.enforce]
+        for g in enforcing:
             g.verifier.install_revocation(issuer, grants)
-        return {"ms": (time.perf_counter() - t0) * 1000, "enforcement_points": len(gateways)}
+        return {"ms": (time.perf_counter() - t0) * 1000, "enforcement_points": len(enforcing)}
 
     return {**parties, "scm": scm, **gateways, "revoke": revoke, "deployment": "in-process"}
 

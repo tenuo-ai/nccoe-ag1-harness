@@ -58,8 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     elif role == "pep":
         from ..forgejo import ForgejoSCM
         issuer = _identity(env["AG1_ISSUER_URL"], "task-authorization-system")
-        origin = _identity(env["AG1_ORIGIN_URL"], "orchestrator")
-        for found in (issuer, origin):  # deployment configuration: who belongs to which domain
+        # The baseline has no origin to check and no route to the agents' key holders.
+        origin = _identity(env["AG1_ORIGIN_URL"], "orchestrator") if env.get("AG1_ORIGIN_URL") else None
+        for found in filter(None, (issuer, origin)):  # who belongs to which domain, fetched once at startup
             adapter.public_principal(found["name"], found["public_id"], found["trust_domain"])
         service = pep.ComposeService(ForgejoSCM(env["AG1_FORGEJO_URL"], _secret("AG1_FORGEJO_TOKEN_FILE"), reset=False),
                                      env["AG1_TEST_SERVICE_URL"], env["AG1_SINK_URL"])

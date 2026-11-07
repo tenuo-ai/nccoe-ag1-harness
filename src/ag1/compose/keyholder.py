@@ -58,9 +58,15 @@ def routes(adapter, identities: list[tuple[str, str]], peps: dict[str, str]) -> 
             raise Rejected(str(exc)) from exc
         return {"grant": b64(adapter.to_bytes(grant))}
 
+    def forge(body):
+        grant = adapter.forge_link(adapter.from_bytes(unb64(body["parent"])), signer(body["signer"]),
+                                   public(body["child"]), caps_from_json(body["caps"]), body["ttl"],
+                                   terminal=body.get("terminal", False))
+        return {"grant": b64(adapter.to_bytes(grant))}
+
     def prove(body):
         chain = adapter.decode_chain(body["chain"]) if body.get("chain") else []
-        proof = adapter.prove(chain, signer(body["holder"]), body["tool"], body["args"])
+        proof = adapter.prove(chain, signer(body["holder"]), body["tool"], body["args"], at=body.get("at"))
         return {"proof": b64(adapter.proof_to_bytes(proof))}
 
     def approve(body):
@@ -92,6 +98,7 @@ def routes(adapter, identities: list[tuple[str, str]], peps: dict[str, str]) -> 
         "POST /principals": new_principal,
         "POST /issue": issue,
         "POST /delegate": delegate,
+        "POST /forge": forge,
         "POST /prove": prove,
         "POST /approve": approve,
         "POST /revoke": revoke,

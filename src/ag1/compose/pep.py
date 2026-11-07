@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 
 from .. import report
-from ..gateway import EnforcementPoint
+from ..gateway import EnforcementPoint, Request
 from .http import call
 from .wire import decision_to_json, request_from_json, unb64
 
@@ -62,7 +62,13 @@ def routes(gateway: EnforcementPoint, trusted_root: str) -> dict:
     adapter = gateway.adapter
 
     def handle(body):
-        req = request_from_json(adapter, body)
+        try:
+            req = request_from_json(adapter, body)
+        except Exception as exc:  # undecodable: a refusal with a record, not a server error
+            req = Request(str(body.get("actor", "")), [], str(body.get("tool", "")), {}, None,
+                          intent=str(body.get("intent", "")))
+            with lock:
+                return decision_to_json(gateway.refuse(req, f"MalformedRequest: {type(exc).__name__}"))
         with lock:
             return decision_to_json(gateway.handle(req))
 

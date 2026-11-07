@@ -43,6 +43,7 @@ source directory, and test suites needed for the job.
 | Open a pull request from the patch branch into `main` | Allowed |
 | Write the same patch directly to `main` | Denied |
 | Escape into `.github/workflows` through traversal or a symlink | Denied |
+| Sign a wider child grant yourself and present it | Denied |
 | Use a copied grant without its holder's key, or replay an accepted request | Denied |
 | Deploy using the development task's grant | Denied |
 
@@ -89,21 +90,23 @@ See [Running AG-1](docs/running.md) for all three, and for how to verify the evi
 | AG-1.1 | Task scoping | Allowed on the task's repository and branch, denied elsewhere |
 | AG-1.2 | Action constraints | Constraints hold on the real target, despite traversal, encodings, and symlinks |
 | AG-1.3 | Sender constraint | A copied chain, a missing proof, and a replay are refused |
-| AG-1.4 | Delegation across a simulated trust boundary | A narrower child is accepted only for the trusted origin and audience; widening is refused |
+| AG-1.4 | Delegation across a simulated trust boundary | A narrower child is accepted only for the trusted origin and audience; widening is refused, including links a holder signs itself |
 | AG-1.5 | Prompt injection | Injected requests are denied, and the real task still proceeds |
 | AG-1.6 | Human approval | Only a valid approval deploys, and only once |
-| AG-1.7 | Expiry and revocation | Expired and revoked grants fail, and a concurrent task keeps working |
-| AG-1.8 | Audit reconstruction | Records are signed and hash-linked; edits and deletions are detected |
-| AG-1.9 | Forged or spliced chain | Tampered, spliced, and untrusted chains are rejected |
-| AG-1.10 | Confused deputy | A service with its own admin credential still refuses out-of-scope requests |
+| AG-1.7 | Expiry and revocation | Expired and revoked grants fail at every enforcing point, and a concurrent task keeps working |
+| AG-1.8 | Audit reconstruction | Records are signed and hash-linked; edited records and records deleted from an export are detected |
+| AG-1.9 | Forged or spliced chain | Tampered, spliced, and untrusted chains, and links signed by the wrong key, are rejected |
+| AG-1.10 | Confused deputy | A service with its own admin credential refuses out-of-scope requests; with enforcement off, it rewrites the workflow |
 
 ## Limits
 
 - The agents are scripted, so this tests the authorization layer, not model behavior.
 - Only Compose runs real test suites, and deployment is a recording sink in every mode.
-- Compose does not authenticate callers on its internal networks, so it isn't a deployment template.
+- Compose does not authenticate callers on its internal networks, and test suites run code the patch
+  agent wrote. It is a test setup, not a deployment template.
 - Misuse inside the granted scope is bounded, not prevented. Code review and testing still matter.
-- Tenuo is the only adapter so far. [Add yours](ADAPTERS.md).
+- Tenuo is the only implementation evaluated so far. A small adapter in `tests/` checks that the steps
+  work without Tenuo. [Add yours](ADAPTERS.md).
 
 The [full list of limits](docs/how-it-works.md#limits) has the details.
 

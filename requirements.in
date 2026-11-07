@@ -4,4 +4,4 @@ tenuo==0.3.5
 cryptography==50.0.2
 cbor2==6.1.5
 pytest==9.1.1
-setuptools==82.0.0
+setuptools==84.1.0
