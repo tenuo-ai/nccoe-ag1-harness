@@ -14,7 +14,8 @@ from pathlib import Path
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .gateway import GENESIS, record_payload
+from .adapters.base import require_audit_time
+from .gateway import GENESIS, audit_time, record_payload
 from .steps import StepResult
 
 
@@ -214,6 +215,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         verifier = adapter.verifier(trusted_root)
     except Exception as exc:  # unreadable bundle or malformed anchor: never valid
         return {"valid": False, "error": f"{type(exc).__name__}: {exc}"}
+    require_audit_time(verifier)
     anchors = {
         "trusted_root_matches": bundle.get("trusted_root") == trusted_root,
         "evidence_key_matches": bundle.get("evidence_public_key") == evidence_key,
@@ -240,7 +242,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         expected_prev = terminal_hash
         if body.get("authorization_chain"):
             try:
-                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=body["time"])
+                verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=audit_time(body))
                 ok = True
             except Exception:
                 ok = False

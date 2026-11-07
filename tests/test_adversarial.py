@@ -285,8 +285,8 @@ def test_harness_detects_disabled_normalization(monkeypatch):
 def test_harness_detects_unlinked_evidence(monkeypatch):
     original = EnforcementPoint._record
 
-    def unlinked(self, req, decision):
-        original(self, req, decision)
+    def unlinked(self, req, decision, checked_at):
+        original(self, req, decision, checked_at)
         self._head = GENESIS
 
     monkeypatch.setattr(EnforcementPoint, "_record", unlinked)

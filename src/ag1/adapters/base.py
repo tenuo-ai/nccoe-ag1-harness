@@ -11,6 +11,7 @@ See ADAPTERS.md for what each method must do and which AG-1 steps use it.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Protocol, runtime_checkable
 
 from ..spec import AdapterCapabilities, ApprovalGate, Capabilities, GrantInfo
@@ -40,7 +41,7 @@ class Verifier(Protocol):
         """
 
     def verify_chain(self, chain: list, *, as_of: int | None = None) -> None:
-        """Verify every link to the trusted root; optionally at a signed event timestamp.
+        """Verify every link to the trusted root; optionally at a signed authorization time.
 
         With no timestamp, validate against the current time. Historical verification
         is for auditing only, never for authorizing execution.
@@ -102,3 +103,9 @@ class Adapter(Protocol):
 
     def signed_content(self, grant: Any) -> bytes:
         """The bytes the signature covers, to tell a content change from an encoding change."""
+
+
+def require_audit_time(verifier: Verifier) -> None:
+    """Fail clearly here, because a TypeError during audit would read as an invalid chain."""
+    if "as_of" not in inspect.signature(verifier.verify_chain).parameters:
+        raise TypeError(f"{type(verifier).__name__}.verify_chain must accept as_of; see ADAPTERS.md")

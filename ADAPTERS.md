@@ -49,7 +49,7 @@ Arguments not listed for a tool must be refused.
 | `prove(chain, holder, tool, args)` | AG-1.3 | Proof bound to the holder's key, the tool, and the exact arguments |
 | `approve(approver, grant, holder, tool, args)` | AG-1.6 | Approval bound to this exact request |
 | `verifier(trusted_root).authorize(...)` | all | Raise `Denied` unless authorized; check proof over the signed arguments and constraints over the normalized ones; use only the trusted root; refuse an identical request already authorized and an approval already used |
-| `verifier(...).verify_chain(chain, as_of=None)` | AG-1.8, 1.9 | Verify every link back to the root without a tool check; use the signed event timestamp when `as_of` is supplied, otherwise the current time |
+| `verifier(...).verify_chain(chain, as_of=None)` | AG-1.8, 1.9 | Verify every link back to the root without a tool check; must accept `as_of`, and use that signed authorization time when it is supplied, otherwise the current time |
 | `verifier(...).install_revocation(issuer, grants)` | AG-1.7 | Make the grants, and everything delegated from them, fail |
 | `info(grant)` | AG-1.8 | Issuer, holder, tools, expiry, and task for evidence records |
 | `approval_info(approval)` | AG-1.8 | Approver, approver identity, and validity for evidence records |
