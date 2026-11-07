@@ -215,7 +215,7 @@ class EnforcementPoint:
             # An unconfigured gateway accepts only requests without an audience;
             # it must not act as a wildcard receiver for another service's grant.
             if canonical.get("audience") != self.audience:
-                raise Denied(f"AudienceMismatch: expected {self.audience}")
+                raise Denied(f"AudienceMismatch: expected {self.audience or 'no audience'}")
             self.verifier.authorize(req.chain, req.tool, req.args, canonical, req.proof, req.approvals)
             if self.trusted_origin_principals is not None:
                 if not req.chain:
