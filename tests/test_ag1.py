@@ -222,3 +222,11 @@ def test_mock_run_resets_a_previously_chosen_service(tmp_path, monkeypatch):
         assert main(["--service", "mock", "--out", str(tmp_path)]) == 0
     finally:
         scenario.use_service(MockSCM)
+
+
+def test_incomplete_workflow_fails_the_run(tmp_path, monkeypatch):
+    from ag1 import __main__ as cli
+
+    monkeypatch.setattr(cli, "STEPS", [])
+    monkeypatch.setattr(cli, "utility_run", lambda adapter: {"mistaken_denials": 0, "workflow_completed": False})
+    assert main(["--out", str(tmp_path)]) == 1
