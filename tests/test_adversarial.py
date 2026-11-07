@@ -299,3 +299,31 @@ def test_approval_single_use_needs_its_own_check():
     world = build_world(adapter_with(NoApprovalSingleUse))
     with pytest.raises(AssertionError):
         test_approval_cannot_be_reused_with_a_fresh_proof(world)
+
+
+def test_successive_revocations_preserve_previous_grants_and_descendants(world):
+    world.revoke([world.patch_agent.chain[-1]])
+    request = world.patch_agent.request("repo.write", WRITE)
+    assert not world.gateway.handle(request).allowed
+    world.revoke([world.release_agent.chain[-1]])
+    world.revoke([])
+    for gateway in (world.gateway, world.receiving, world.other_service):
+        verifier = gateway.verifier
+        for agent, tool, args in (
+            (world.patch_agent, "repo.write", WRITE),
+            (world.test_runner, "test.run", {"repo": REPO, "branch": FIX_BRANCH, "suite": "unit"}),
+            (world.release_agent, "deploy.staging", {"artifact": ARTIFACT}),
+        ):
+            req = agent.request(tool, args)
+            with pytest.raises(Denied, match="Revoked"):
+                verifier.authorize(req.chain, tool, args, args, req.proof, None)
+    assert world.call(world.orchestrator, "repo.read", {"repo": REPO}).allowed
+
+
+def test_rejected_revocation_does_not_poison_local_state(world):
+    verifier = world.gateway.verifier
+    with pytest.raises(Exception):
+        verifier.install_revocation(world.adapter.new_principal("intruder"), [world.task_grant])
+    verifier.install_revocation(world.issuer, [world.patch_agent.chain[-1]])
+    assert world.call(world.orchestrator, "repo.read", {"repo": REPO}).allowed
+    assert not world.call(world.patch_agent, "repo.write", WRITE).allowed

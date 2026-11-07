@@ -96,6 +96,7 @@ class TenuoVerifier:
         self._nonces = NonceStore(ttl_seconds=self._authorizer.pop_validity_secs() + CLOCK_TOLERANCE_SECS)
         self._used_approvals: set[bytes] = set()
         self._revocation_version = 0
+        self._revoked_grants: dict[str, Warrant] = {}
 
     def authorize(self, chain, tool, signed_args, constraint_args, proof, approvals):
         if proof is not None and self._nonces.is_replay(bytes(proof)):
@@ -119,8 +120,12 @@ class TenuoVerifier:
         self._authorizer.verify_chain(chain)
 
     def install_revocation(self, issuer: TenuoPrincipal, grants):
-        self._revocation_version += 1
-        self.apply_revocation(_revocation_list(issuer, grants, self._revocation_version))
+        revoked = {**self._revoked_grants, **{g.id: g for g in grants}}
+        version = self._revocation_version + 1
+        self.apply_revocation(_revocation_list(issuer, revoked.values(), version))
+        # Commit only after the signed list has been accepted by the authorizer.
+        self._revoked_grants = revoked
+        self._revocation_version = version
 
     def apply_revocation(self, data: bytes) -> None:
         self._authorizer.set_revocation_list(SignedRevocationList.from_bytes(data))
