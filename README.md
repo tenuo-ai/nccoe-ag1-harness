@@ -1,4 +1,4 @@
-# AG-1: test the limits of an AI agent's authority
+# AG-1: a test harness for AI agent authorization
 
 **An agent is told to fix a bug. An injected instruction tells it to rewrite the release workflow.
 Does the tool gateway let it?**
