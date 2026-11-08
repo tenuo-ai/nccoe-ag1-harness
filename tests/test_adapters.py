@@ -39,3 +39,11 @@ def test_object_missing_contract_members_is_refused(monkeypatch):
     monkeypatch.setitem(sys.modules, "incomplete_adapter", module)
     with pytest.raises(TypeError, match="missing: .*capabilities.*issue"):
         adapters.load("incomplete_adapter:NotAnAdapter")
+
+
+def test_duplicate_entry_point_names_are_refused(monkeypatch):
+    eps = [EntryPoint("dup", "ag1.adapters.reference:ReferenceAdapter", adapters.ENTRY_POINT_GROUP),
+           EntryPoint("dup", "other_pkg.adapter:Other", adapters.ENTRY_POINT_GROUP)]
+    monkeypatch.setattr(adapters, "entry_points", lambda group: eps)
+    with pytest.raises(LookupError, match="several packages register adapter 'dup'.*other_pkg"):
+        adapters.load("dup")

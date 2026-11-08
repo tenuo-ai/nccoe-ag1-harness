@@ -33,6 +33,9 @@ def load(spec: str = DEFAULT) -> Adapter:
         found = [ep for ep in entry_points(group=ENTRY_POINT_GROUP) if ep.name == spec]
         if not found:
             raise LookupError(f"no adapter {spec!r}: use one of {', '.join(available())}, or module:Class")
+        if len({ep.value for ep in found}) > 1:
+            raise LookupError(f"several packages register adapter {spec!r} "
+                              f"({', '.join(sorted({ep.value for ep in found}))}); pass module:Class instead")
         return _checked(spec, found[0].load()())
     module, _, cls = target.partition(":")
     try:
