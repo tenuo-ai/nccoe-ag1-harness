@@ -54,11 +54,12 @@ docker compose down -v
 ```
 
 A compose run prints one evidence key per enforcement point, and each enforcement point also logs
-its key when it starts. Verify with one `--evidence-key NAME=HEX` per bundle in
+its key when it starts. Verify on the host with the same adapter the containers used (install the
+Tenuo extra first, as in [Local run](#local-run)) and one `--evidence-key NAME=HEX` per bundle in
 `results-compose/evidence/`:
 
 ```bash
-.venv/bin/python -m ag1 --verify results-compose --trusted-root <hex> \
+.venv/bin/python -m ag1 --adapter tenuo --verify results-compose --trusted-root <hex> \
   --evidence-key main=<hex> --evidence-key receiving=<hex> \
   --evidence-key other-service=<hex> --evidence-key baseline=<hex>
 ```
