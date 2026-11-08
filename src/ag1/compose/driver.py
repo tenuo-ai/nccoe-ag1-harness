@@ -26,6 +26,7 @@ from .wire import b64, caps_to_json, decision_from_json, gate_to_json, party, re
 PLACEMENT = {
     "task-authorization-system": "issuer",
     "release-manager": "approver",
+    "second-release-manager": "approver",
     "orchestrator": "orchestrator",
     "concurrent-reader": "orchestrator",
     "patch-agent": "patch-agent",

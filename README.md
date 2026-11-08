@@ -1,6 +1,6 @@
 # AG-1: a test harness for AI agent authorization
 
-AG-1 tests whether authorization controls hold when an AI agent is compromised. In its scenario, an
+AG-1 tests whether authorization controls hold when a scripted agent submits malicious tool requests. In its scenario, an
 agent assigned to fix a vulnerability receives an injected instruction to rewrite the release
 workflow, and the harness checks that the action is refused before it runs. It is intended for
 anyone building or evaluating these controls for software development agents.
@@ -9,6 +9,11 @@ Each task gets a *grant*: short-lived authority limited to the tools, repositori
 paths that task needs. Before each tool call runs, an *enforcement point* checks it against the
 grant. AG-1's scripted agents attempt both legitimate work and deliberate violations across ten
 steps, then the harness reports each decision with signed evidence.
+
+The claim is bounded: requests through the enforcement point are checked before the service
+executes them. This is not a test of containment after arbitrary container compromise; Compose
+signing endpoints trust internal callers. See the [enforcement audit](docs/enforcement-audit.md)
+for tested boundaries, negative controls, and remaining deployment assumptions.
 
 ```mermaid
 flowchart LR

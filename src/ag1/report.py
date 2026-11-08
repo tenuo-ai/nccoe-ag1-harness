@@ -282,7 +282,8 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         pass
     chained = sum(1 for item in records
                   if isinstance(item, dict) and isinstance(item.get("record"), dict)
-                  and item["record"].get("authorization_chain") and item["record"].get("decision") == "allowed")
+                  and item["record"].get("decision") == "allowed"
+                  and (item["record"].get("enforced", True) or item["record"].get("authorization_chain")))
     return {
         **anchors,
         "records": count,

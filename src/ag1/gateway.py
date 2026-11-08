@@ -17,6 +17,7 @@ import json
 import posixpath
 import re
 import shlex
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
@@ -138,6 +139,7 @@ class EnforcementPoint:
     evidence: list[dict] = field(default_factory=list)
     _signer: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
     _head: str = GENESIS
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.verifier = self.adapter.verifier(self.trusted_root)
@@ -224,6 +226,12 @@ class EnforcementPoint:
         return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
+        # Replay/approval consumption and the service call form one transaction.
+        # Also keeps evidence sequence numbers and hash links ordered.
+        with self._lock:
+            return self._handle(req)
+
+    def _handle(self, req: Request) -> Decision:
         checked_at = int(time.time())
         try:
             canonical = self.normalize(req.tool, req.args)
