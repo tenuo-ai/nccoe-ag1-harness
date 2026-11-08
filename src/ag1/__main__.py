@@ -11,15 +11,16 @@ from pathlib import Path
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 from . import report, scenario  # noqa: E402
-from .adapters import ADAPTERS, load  # noqa: E402
+from .adapters import DEFAULT, available, load  # noqa: E402
 from .scm import MockSCM  # noqa: E402
 from .steps import STEPS, evidence_run, utility_run  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ag1", description=__doc__)
-    parser.add_argument("--adapter", default="tenuo",
-                        help=f"registered name ({', '.join(ADAPTERS)}) or module:Class")
+    parser.add_argument("--adapter", default=os.environ.get("AG1_ADAPTER", DEFAULT),
+                        help=f"registered or entry point name ({', '.join(available())}), or module:Class "
+                             f"(default $AG1_ADAPTER, else {DEFAULT})")
     parser.add_argument("--mode", choices=("in-process", "compose"), default="in-process",
                         help="in-process (default), or compose: every party and enforcement point a separate "
                              "service, configured by the AG1_* variables compose.yaml sets for the driver")
@@ -39,7 +40,10 @@ def main(argv: list[str] | None = None) -> int:
                              "compose run, one NAME=HEX per enforcement point")
     args = parser.parse_args(argv)
 
-    adapter = load(args.adapter)
+    try:
+        adapter = load(args.adapter)
+    except (LookupError, ModuleNotFoundError) as e:
+        parser.error(str(e))
     if args.verify is not None:
         if not (args.trusted_root and args.evidence_key):
             parser.error("--verify needs --trusted-root and --evidence-key from a source other than the bundle")

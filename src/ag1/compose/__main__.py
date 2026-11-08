@@ -13,7 +13,7 @@ import warnings
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from ..adapters import load  # noqa: E402
+from ..adapters import DEFAULT, load  # noqa: E402
 from ..gateway import EnforcementPoint  # noqa: E402
 from . import keyholder, pep, sink, testservice  # noqa: E402
 from .http import call, make_server  # noqa: E402
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("role", choices=("keyholder", "pep", "test-service", "sink"))
     role = parser.parse_args(argv).role
     env = os.environ
-    adapter = load(env.get("AG1_ADAPTER", "tenuo"))
+    adapter = load(env.get("AG1_ADAPTER", DEFAULT))
 
     if role == "keyholder":
         identities = [tuple(i.split("@", 1)) for i in env.get("AG1_IDENTITIES", "").split(",") if i]

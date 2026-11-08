@@ -20,6 +20,15 @@ python -m venv .venv
 .venv/bin/python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
 ```
 
+The default adapter is the built-in reference adapter. To run the Tenuo adapter, install its
+extra and pass `--adapter tenuo` (or set `AG1_ADAPTER=tenuo`):
+
+```bash
+.venv/bin/pip install --require-hashes -r requirements-tenuo-lock.txt
+AG1_ADAPTER=tenuo .venv/bin/pytest -q
+.venv/bin/python -m ag1 --adapter tenuo --out results-tenuo
+```
+
 ## Forgejo
 
 Needs Docker and git:
@@ -35,7 +44,8 @@ a throwaway forge.
 
 ## Compose
 
-Needs Docker Compose:
+Needs Docker Compose and an adapter with remote operation (see [ADAPTERS.md](../ADAPTERS.md#remote-operation-compose-mode)).
+`compose.yaml` sets `AG1_ADAPTER: tenuo`; change it to run another adapter.
 
 ```bash
 scripts/compose-up.sh            # Forgejo, its two tokens as Docker secrets, then every service
@@ -86,10 +96,17 @@ key. Those need a head anchored elsewhere.
 ## Dependencies
 
 `requirements-lock.txt` pins every package with its hashes, so pip refuses any file that differs
-from the one tested. Regenerate it with
-`uv pip compile requirements.in --generate-hashes --universal --python-version 3.10 -o requirements-lock.txt`.
+from the one tested. It has no implementation packages. `requirements-tenuo-lock.txt` adds the
+`tenuo` extra. Regenerate them with
+
+```bash
+uv pip compile requirements.in --generate-hashes --universal --python-version 3.10 -o requirements-lock.txt
+uv pip compile requirements-tenuo.in --generate-hashes --universal --python-version 3.10 -o requirements-tenuo-lock.txt
+```
 
 ## Container
+
+The image installs the Tenuo extra, since Compose uses it.
 
 ```bash
 docker build -t nccoe-ag1-harness .

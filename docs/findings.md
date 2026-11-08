@@ -12,8 +12,9 @@
   normalization, evidence linking) and asserts that the harness then reports a failure. A harness
   that still says "met" with a defense switched off would be measuring nothing.
 
-`tests/test_reference_adapter.py` runs the steps against a small adapter with no Tenuo code. The same
-adapter with its delegation checks removed fails AG-1.4 and AG-1.9.
+`tests/test_reference_adapter.py` runs the steps against the built-in reference adapter, which shares
+no code with the Tenuo adapter. The same adapter with its delegation checks removed fails AG-1.4 and
+AG-1.9.
 
 ## What pressure testing found, and how it is handled
 
@@ -52,7 +53,7 @@ These came from attacking the harness, not from the ten steps as first written.
 
 ## Tenuo version
 
-The harness pins Tenuo 0.3.5, which includes
+The `tenuo` extra pins Tenuo 0.3.5, which includes
 [tenuo-ai/tenuo#997](https://github.com/tenuo-ai/tenuo/pull/997). Three behaviours in the results
 come from that change:
 

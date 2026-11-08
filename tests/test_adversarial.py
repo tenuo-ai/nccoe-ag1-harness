@@ -10,12 +10,14 @@ import time
 
 import pytest
 
-from ag1 import steps
-from ag1.adapters.tenuo_adapter import TenuoAdapter, TenuoVerifier
-from ag1.gateway import GENESIS, Decision, EnforcementPoint, Request, chain_head, checkpoint_covers
-from ag1.scenario import ARTIFACT, FIX_BRANCH, REPO, build_world, write_caps
-from ag1.scm import ServiceError
-from ag1.spec import AnyValue, Denied, DelegationRejected
+pytest.importorskip("tenuo")
+
+from ag1 import steps  # noqa: E402
+from ag1.adapters.tenuo_adapter import TenuoAdapter, TenuoVerifier  # noqa: E402
+from ag1.gateway import GENESIS, Decision, EnforcementPoint, Request, chain_head, checkpoint_covers  # noqa: E402
+from ag1.scenario import ARTIFACT, FIX_BRANCH, REPO, build_world, write_caps  # noqa: E402
+from ag1.scm import ServiceError  # noqa: E402
+from ag1.spec import AnyValue, Denied, DelegationRejected  # noqa: E402
 
 WRITE = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.c", "content": "x"}
 

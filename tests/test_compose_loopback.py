@@ -10,7 +10,7 @@ import os
 import pytest
 
 from ag1 import report, scenario
-from ag1.adapters import load
+from ag1.adapters import DEFAULT, load
 from ag1.compose import keyholder, pep, sink
 from ag1.compose.driver import ComposeConfig, RemotePrincipal, deployment
 from ag1.compose.http import RemoteError, call, serve_in_thread
@@ -19,7 +19,9 @@ from ag1.scenario import CONTROL_DOMAIN, DEVELOPMENT_DOMAIN, TEST_AUDIENCE, TEST
 from ag1.scm import MockSCM
 from ag1.steps import STEPS, evidence_run, utility_run
 
-ADAPTER = os.environ.get("AG1_ADAPTER", "tenuo")
+ADAPTER = os.environ.get("AG1_ADAPTER", DEFAULT)
+if not hasattr(load(ADAPTER), "public_principal"):
+    pytest.skip(f"adapter {ADAPTER!r} has no remote operation (see ADAPTERS.md)", allow_module_level=True)
 HOLDERS = {
     "issuer": [("task-authorization-system", CONTROL_DOMAIN)],
     "approver": [],

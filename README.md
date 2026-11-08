@@ -19,14 +19,13 @@ flowchart LR
     C -->|every decision| F[Signed evidence]
 ```
 
-**Who built this.** AG-1 is maintained by [Tenuo](https://github.com/tenuo-ai/tenuo), which makes
-open-source task-scoped authorization for AI agents. Tenuo is the first implementation tested here,
-and other implementations can be integrated through an [adapter](ADAPTERS.md). Tenuo also authored
-[Attenuating Authorization Tokens](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
-(AAT), an individual IETF Internet-Draft for delegated authority with public test vectors. AG-1 does
-not require AAT.
+Any authorization implementation can run the same ten steps through an [adapter](ADAPTERS.md):
+OAuth token exchange, a capability token format, a policy engine with delegation, or something
+else. The harness keeps the scenario, the services, argument normalization, and the evidence
+format identical across implementations, and the steps are the same for everyone. See
+[Add your implementation](CONTRIBUTING.md#add-your-implementation).
 
-**Background.** Tenuo proposed AG-1 in [its comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the
+**Background.** AG-1 was proposed in [public comments](docs/tenuo-nccoe-devsecops-comments.pdf) on the
 NIST NCCoE *DevSecOps Practices* live document, for Example Implementation 3, NCCoE's planned
 demonstration of AI agents in software development.
 
@@ -52,15 +51,10 @@ With enforcement turned off, the service's admin credential can rewrite the rele
 The legitimate patch-and-test workflow is evaluated separately to check that useful work still
 completes.
 
-**The checked-in [sample run with the Tenuo adapter](docs/sample-results.md) met all ten steps,
-completed the authorized workflow, and recorded zero denials of in-scope requests.** It ran in the
-harness's containerized Compose mode, with Forgejo for repositories and pull requests, a service
-running real pytest suites, and a recording sink for deployment.
-
 ## Quick start
 
-Requires Python 3.10 or newer. This run uses an in-memory service and needs no Docker or model
-credentials.
+Requires Python 3.10 or newer. This run uses an in-memory service and the built-in reference
+adapter, and needs no Docker, model credentials, or vendor package.
 
 ```bash
 git clone https://github.com/tenuo-ai/nccoe-ag1-harness.git && cd nccoe-ag1-harness
@@ -72,6 +66,28 @@ python -m venv .venv
 
 Open `results/results.md` for the findings. The command exits nonzero if a step fails, an in-scope
 request is denied, or the authorized workflow does not complete.
+
+To run an installed implementation instead, pass `--adapter` with a registered name, an
+`ag1.adapters` entry point name, or a `module:Class` path:
+
+```bash
+.venv/bin/pip install --require-hashes -r requirements-tenuo-lock.txt   # or: pip install '.[tenuo]'
+.venv/bin/python -m ag1 --adapter tenuo --out results-tenuo
+.venv/bin/python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
+```
+
+## Results
+
+Each row is one implementation run against all ten steps. Add a row by opening a pull request with
+a CI run or a results directory; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+| Implementation | Version | Harness commit | Run | Mode | Steps met |
+| :- | :- | :- | :- | :- | :- |
+| Reference adapter (example, not for deployment) | built in | every push to `main` | [CI](https://github.com/tenuo-ai/nccoe-ag1-harness/actions/workflows/ci.yml?query=branch%3Amain) | In-memory | 10/10 |
+| [Tenuo](https://github.com/tenuo-ai/tenuo) | 0.3.5 | `4702b6c` | [42423105182](https://github.com/tenuo-ai/nccoe-ag1-harness/actions/runs/42423105182) | Compose | 10/10 ([results](docs/sample-results.md)) |
+
+The reference adapter exists to show the steps do not depend on any one product and to catch a
+verifier that skips checks. It has no remote operation, so it does not run in Compose mode.
 
 ## Three ways to run
 
@@ -105,8 +121,8 @@ See [Running AG-1](docs/running.md) for all three, and for how to verify the evi
 - Compose does not authenticate callers on its internal networks, and test suites run code the patch
   agent wrote. It is a test setup, not a deployment template.
 - Misuse inside the granted scope is bounded, not prevented. Code review and testing still matter.
-- Tenuo is the only implementation evaluated so far. A small adapter in `tests/` checks that the steps
-  work without Tenuo. [Add yours](ADAPTERS.md).
+- Results describe an implementation integrated with the harness's reference enforcement point. Each
+  report's responsibility table shows which component supplies each control.
 
 The [full list of limits](docs/how-it-works.md#limits) has the details.
 
@@ -115,10 +131,17 @@ The [full list of limits](docs/how-it-works.md#limits) has the details.
 - [How it works](docs/how-it-works.md): the flow, Compose mode, who supplies each control, and the
   detailed steps
 - [Running AG-1](docs/running.md): every mode, the outputs, and evidence verification
-- [Findings](docs/findings.md): pressure testing, what it found, and Tenuo version notes
-- [Sample results](docs/sample-results.md): a Compose run
+- [Writing an adapter](ADAPTERS.md) and [contributing](CONTRIBUTING.md)
+- [Findings](docs/findings.md): pressure testing, what it found, and implementation version notes
+- [Sample results](docs/sample-results.md): a Compose run with the Tenuo adapter
 
-Questions or a new adapter: open an issue or email founders@tenuo.ai.
+## Maintainers
+
+AG-1 is maintained by [Tenuo](https://github.com/tenuo-ai/tenuo), whose implementation is one of the
+adapters here. Tenuo also authored
+[Attenuating Authorization Tokens](https://datatracker.ietf.org/doc/draft-niyikiza-oauth-attenuating-agent-tokens/)
+(AAT), an individual IETF Internet-Draft; AG-1 does not require it. Questions or a new adapter: open
+an issue or email founders@tenuo.ai.
 
 ## License
 

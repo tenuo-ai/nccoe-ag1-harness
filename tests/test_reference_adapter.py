@@ -1,7 +1,7 @@
 """The steps run against an implementation that is not Tenuo, and catch a weak one."""
 
 import pytest
-from reference_adapter import ReferenceAdapter, Verifier
+from ag1.adapters.reference import ReferenceAdapter, Verifier
 
 from ag1 import spec, steps
 from ag1.steps import STEPS, ag1_04, ag1_08, ag1_09, utility_run

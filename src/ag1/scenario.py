@@ -18,7 +18,7 @@ from typing import Any, Callable, Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-from .adapters import load
+from .adapters import DEFAULT, load
 from .adapters.base import Adapter, Principal
 from .gateway import Decision, EnforcementPoint, Request
 from .scm import MockSCM, Service
@@ -202,7 +202,7 @@ def use_deployment(factory: Callable[[Adapter], dict] | None) -> None:
 
 def build_world(adapter: Adapter | str | None = None) -> World:
     if adapter is None or isinstance(adapter, str):
-        adapter = load(adapter or "tenuo")
+        adapter = load(adapter or DEFAULT)
     d = _deployment(adapter)
     adapter = d.get("adapter", adapter)
     issuer, orch, patch, runner, release = d["issuer"], d["orchestrator"], d["patch"], d["runner"], d["release"]

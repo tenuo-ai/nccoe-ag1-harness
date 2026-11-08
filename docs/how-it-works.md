@@ -157,7 +157,7 @@ authority and their latency, and denials of in-scope requests.
   propagation is not tested, and the harness sets no propagation objective.
 - Misuse inside the granted scope is not prevented, only bounded. Code review, testing and branch
   protection remain necessary.
-- Tenuo is the only implementation evaluated so far. `tests/reference_adapter.py` is a small non-Tenuo
-  adapter used to test the harness.
+- Two adapters are included: Tenuo, and `src/ag1/adapters/reference.py`, a small example used as
+  the default and to test the harness. The reference adapter is not meant for deployment.
 - Utility timing is local, automated harness processing. It does not represent network propagation,
   policy review, or human approval latency.

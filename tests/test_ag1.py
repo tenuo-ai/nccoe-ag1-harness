@@ -8,12 +8,12 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from ag1 import report
 from ag1.__main__ import main
-from ag1.adapters import load
+from ag1.adapters import DEFAULT, load
 from ag1.gateway import GENESIS, NormalizationError, parse_argv, record_payload
 from ag1.spec import AdapterCapabilities
 from ag1.steps import STEPS, StepResult, evidence_run, utility_run
 
-ADAPTER = load(os.environ.get("AG1_ADAPTER", "tenuo"))
+ADAPTER = load(os.environ.get("AG1_ADAPTER", DEFAULT))
 
 
 @pytest.mark.parametrize("step", STEPS, ids=lambda s: s.__name__)
@@ -305,14 +305,14 @@ def test_tool_call_outlasting_its_grant_still_verifies(tmp_path, monkeypatch):
 
 
 def test_verifier_without_as_of_is_a_clear_error(tmp_path, monkeypatch):
-    from ag1.adapters.tenuo_adapter import TenuoVerifier
     from ag1.scenario import build_world
 
-    class OldSignature(TenuoVerifier):
+    world = build_world(ADAPTER)
+
+    class OldSignature(type(ADAPTER.verifier(world.issuer))):
         def verify_chain(self, chain):
             return None
 
-    world = build_world(ADAPTER)
     report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
     monkeypatch.setattr(ADAPTER, "verifier", OldSignature)
     result = report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))

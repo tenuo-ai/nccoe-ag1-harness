@@ -1,8 +1,9 @@
-"""A second AG-1 adapter, written from ADAPTERS.md, with no Tenuo code.
+"""A small AG-1 adapter written from ADAPTERS.md, with no dependency beyond `cryptography`.
 
-Grants are JSON objects signed with Ed25519. It exists to show the steps do not depend on
-Tenuo, and that they fail a verifier missing a delegation check. It is a test fixture, not
-an implementation to deploy.
+Grants are JSON objects signed with Ed25519, and each link carries the hash of its parent.
+It is a readable example of the adapter contract and the default for a first run. It is not
+an authorization implementation to deploy: it has no key management, no persistent replay or
+revocation state, and no remote operation, so compose mode needs another adapter.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from ag1 import spec
+from .. import spec
 
 PROOF_WINDOW_SECS = 60
 

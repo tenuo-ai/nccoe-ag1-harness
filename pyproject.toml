@@ -10,12 +10,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 dependencies = [
-    "tenuo==0.3.5",
     "cryptography==50.0.2",
-    "cbor2==6.1.5",
 ]
 
 [project.optional-dependencies]
+tenuo = ["tenuo==0.3.5", "cbor2==6.1.5"]
 test = ["pytest==9.1.1"]
 
 [project.scripts]
