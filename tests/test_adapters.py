@@ -24,3 +24,18 @@ def test_entry_point_loads_a_third_party_adapter(monkeypatch):
 def test_unknown_name_lists_the_choices():
     with pytest.raises(LookupError, match="reference, tenuo"):
         adapters.load("no-such-adapter")
+
+
+class NotAnAdapter:
+    name = "incomplete"
+    version = "0"
+
+
+def test_object_missing_contract_members_is_refused(monkeypatch):
+    import sys
+    import types
+    module = types.ModuleType("incomplete_adapter")
+    module.NotAnAdapter = NotAnAdapter
+    monkeypatch.setitem(sys.modules, "incomplete_adapter", module)
+    with pytest.raises(TypeError, match="missing: .*capabilities.*issue"):
+        adapters.load("incomplete_adapter:NotAnAdapter")

@@ -1,21 +1,23 @@
 """Checks at the actual service-call boundary, independent of evidence labels."""
-import importlib.util
 import time
 from dataclasses import replace
 
 import pytest
 
 from ag1 import scenario, steps
-from ag1.adapters import load
+from ag1.adapters import EXTRAS, load
 from ag1.gateway import EnforcementPoint
 from ag1.spec import ApprovalGate, Exact
 
 
 @pytest.fixture(params=['reference', 'tenuo'])
 def adapter(request):
-    if request.param == 'tenuo' and importlib.util.find_spec('tenuo') is None:
-        pytest.skip('optional Tenuo extra not installed')
-    return load(request.param)
+    try:
+        return load(request.param)
+    except ModuleNotFoundError as exc:
+        if exc.name and exc.name.split('.')[0] in EXTRAS.get(request.param, ()):
+            pytest.skip(f'optional {request.param} extra not installed')
+        raise
 
 
 def quorum_world(adapter):

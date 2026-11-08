@@ -33,7 +33,7 @@ def load(spec: str = DEFAULT) -> Adapter:
         found = [ep for ep in entry_points(group=ENTRY_POINT_GROUP) if ep.name == spec]
         if not found:
             raise LookupError(f"no adapter {spec!r}: use one of {', '.join(available())}, or module:Class")
-        return found[0].load()()
+        return _checked(spec, found[0].load()())
     module, _, cls = target.partition(":")
     try:
         loaded = importlib.import_module(module)
@@ -42,4 +42,14 @@ def load(spec: str = DEFAULT) -> Adapter:
             raise ModuleNotFoundError(f"the {spec} adapter needs: pip install 'nccoe-ag1-harness[{spec}]'",
                                       name=e.name) from e
         raise
-    return getattr(loaded, cls)()
+    return _checked(spec, getattr(loaded, cls)())
+
+
+def _checked(spec: str, adapter) -> Adapter:
+    if not isinstance(adapter, Adapter):
+        members = set(Adapter.__annotations__) | {n for n, v in vars(Adapter).items()
+                                                   if callable(v) and not n.startswith("_")}
+        missing = sorted(m for m in members if not hasattr(adapter, m))
+        raise TypeError(f"adapter {spec!r} does not implement the Adapter contract in ADAPTERS.md; "
+                        f"missing: {', '.join(missing)}")
+    return adapter

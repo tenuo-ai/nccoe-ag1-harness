@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         adapter = load(args.adapter)
-    except (LookupError, ModuleNotFoundError) as e:
+    except (LookupError, ModuleNotFoundError, TypeError) as e:
         parser.error(str(e))
     if args.verify is not None:
         if not (args.trusted_root and args.evidence_key):
