@@ -309,11 +309,20 @@ def test_verifier_without_as_of_is_a_clear_error(tmp_path, monkeypatch):
 
     world = build_world(ADAPTER)
 
-    class OldSignature(type(ADAPTER.verifier(world.issuer))):
+    class OldSignature:
+        """Wraps the adapter's own verifier, with a verify_chain that predates as_of."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
         def verify_chain(self, chain):
             return None
 
     report.write([], {}, tmp_path, ADAPTER, world.scm, evidence_world=world)
-    monkeypatch.setattr(ADAPTER, "verifier", OldSignature)
+    original = ADAPTER.verifier
+    monkeypatch.setattr(ADAPTER, "verifier", lambda *args, **kwargs: OldSignature(original(*args, **kwargs)))
     result = report.verify_bundle(tmp_path, ADAPTER, *_anchors(world))
     assert not result["valid"] and "must accept as_of" in result["error"]
