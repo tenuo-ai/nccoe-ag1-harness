@@ -63,8 +63,10 @@ docker compose run --rm driver
 Some checks depend on a capability an architecture may not have. They are reported as
 *not applicable*, with the reason, and are never counted as met:
 
-- Without `forge_link`, the checks that present a self-signed or spliced link to the enforcement
-  point (AG-1.4, AG-1.9) are not applicable.
+- Without `forge_link`, the checks that present a link built without a delegation check (a holder
+  signing a wider child, or a key that does not hold the parent) to the enforcement point (AG-1.4,
+  AG-1.9) are not applicable. The spliced-chain and untrusted-root checks still run, since they use
+  only `issue` and `delegate`.
 - A `verification_mode` other than `offline_chain` makes the offline-verification checks not
   applicable.
 - An `opaque` `artifact_mode` makes the checks that mutate signed content not applicable.
