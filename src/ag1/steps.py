@@ -36,7 +36,7 @@ from .scenario import (
     write_caps,
 )
 from .scm import LEXER_FIXED
-from .spec import DelegationRejected, Exact, Under
+from .spec import ApprovalGate, DelegationRejected, Exact, Under
 
 WRITE_OK = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.c", "content": "/* fixed */"}
 PATCH = {"repo": REPO, "branch": FIX_BRANCH, "path": "/src/parser/lexer.py", "content": LEXER_FIXED}
@@ -414,7 +414,7 @@ def ag1_05(adapter=None) -> StepResult:
 def ag1_06(adapter=None) -> StepResult:
     r = StepResult("AG-1.6", "Human approval",
                    "Only the action with valid, action-bound approval proceeds. An approval for a different "
-                   "artifact, an expired approval, and a reused approval are refused.")
+                   "artifact, an expired approval, a reused approval, and insufficient quorum are refused.")
     w = build_world(adapter)
     a, ra = w.adapter, w.release_agent
     _prepare(r, a)
@@ -447,6 +447,20 @@ def ag1_06(adapter=None) -> StepResult:
     r.decision("development task attempts the deploy (no deploy authority at all)",
                w.call(w.patch_agent, "deploy.staging", args, intent="attack"), False, "tool")
     r.fact("deployments executed", "1", str(len(w.scm.deployments)), len(w.scm.deployments) == 1)
+    second = a.new_principal("second-release-manager")
+    quorum_grant = a.issue(w.issuer, ra.principal, {"deploy.staging": {"artifact": Exact(ARTIFACT)}},
+                           ttl=300, gate=ApprovalGate(("deploy.staging",), [w.release_approver, second], threshold=2))
+    quorum = w.agent(ra.principal, [quorum_grant])
+    first_vote = a.approve(w.release_approver, quorum_grant, ra.principal, "deploy.staging", args)
+    r.decision("two-approver gate with only one approval",
+               w.call(quorum, "deploy.staging", args, approvals=[first_vote], intent="attack"), False)
+    r.decision("two-approver gate with the same approval repeated",
+               w.call(quorum, "deploy.staging", args, approvals=[first_vote, first_vote], intent="attack"), False)
+    second_vote = a.approve(second, quorum_grant, ra.principal, "deploy.staging", args)
+    r.decision("two-approver gate with two distinct approvals",
+               w.call(quorum, "deploy.staging", args, approvals=[first_vote, second_vote]), True)
+    r.fact("only the two approved deployments executed", "2", str(len(w.scm.deployments)),
+           len(w.scm.deployments) == 2)
     r.comments = ("Approval binding, expiry and single use are the implementation's. Single use needs it to remember "
                   "approvals it has accepted.")
     return _finish(r, a)
@@ -668,6 +682,8 @@ def ag1_09(adapter=None) -> StepResult:
     _prepare(r, a)
     verifier = a.verifier(w.issuer)
     patch = w.patch_agent.chain[-1]
+    r.decision("control: an unmodified chain executes an in-scope request",
+               w.call(w.patch_agent, "repo.write", PATCH), True)
 
     if a.capabilities.artifact_mode == "structured_signed":
         try:
@@ -823,12 +839,14 @@ def utility_run(adapter=None) -> dict:
     runs = w.scm.test_runs[runs_before:]
     tests_ran = any("passed" in run for run in runs)
     tests_ok = len(runs) == len(tests) and all(run.get("passed", True) for run in runs)
+    patch_present = w.scm.file(REPO, FIX_BRANCH, PATCH["path"]) == PATCH["content"]
     tasks = {"read repository": read.allowed, "write patch": write.allowed,
              "run unit and parser tests": tests[0].allowed and tests[1].allowed,
              "run integration tests": first.allowed, "open pull request": pull_request.allowed}
     return {
         "workflow_completed": all(x["decision"] == "allowed" for x in legit) and stepped.allowed
-                              and bool(w.scm.pull_requests()) and tests_ok,
+                              and bool(w.scm.pull_requests()) and tests_ok and patch_present,
+        "patch_present": patch_present,
         "tests_passed": tests_ok if tests_ran else None,
         "tasks_within_initial_grant": f"{sum(tasks.values())}/{len(tasks)}",
         "requests_for_additional_authority": int(not first.allowed),

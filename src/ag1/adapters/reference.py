@@ -1,8 +1,9 @@
-"""A second AG-1 adapter, written from ADAPTERS.md, with no Tenuo code.
+"""A small AG-1 adapter written from ADAPTERS.md, with no dependency beyond `cryptography`.
 
-Grants are JSON objects signed with Ed25519. It exists to show the steps do not depend on
-Tenuo, and that they fail a verifier missing a delegation check. It is a test fixture, not
-an implementation to deploy.
+Grants are JSON objects signed with Ed25519, and each link carries the hash of its parent.
+It is a readable example of the adapter contract and the default for a first run. It is not
+an authorization implementation to deploy: it has no key management, no persistent replay or
+revocation state, and no remote operation, so compose mode needs another adapter.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from dataclasses import dataclass
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from ag1 import spec
+from .. import spec
 
 PROOF_WINDOW_SECS = 60
 
@@ -33,7 +34,9 @@ def _constraint(c) -> list:
         return ["one_of", list(c.values)]
     if isinstance(c, spec.Under):
         return ["under", c.root]
-    return ["any"]
+    if isinstance(c, spec.AnyValue):
+        return ["any"]
+    raise TypeError(f"unsupported constraint {c!r}")
 
 
 def _matches(c: list, value) -> bool:
@@ -44,7 +47,7 @@ def _matches(c: list, value) -> bool:
         return value == c[1]
     if kind == "one_of":
         return value in c[1]
-    return isinstance(value, str) and (value == c[1] or value.startswith(c[1].rstrip("/") + "/"))
+    return kind == "under" and isinstance(value, str) and (value == c[1] or value.startswith(c[1].rstrip("/") + "/"))
 
 
 def _within(parent: list, child: list) -> bool:
@@ -143,7 +146,12 @@ class Verifier:
             raise spec.Denied("Replay")
         try:
             at = int(proof[:10])
-            _verify_signature(leaf["holder"], proof[10:].decode(), canon([leaf["id"], tool, signed_args, at]))
+            signature = proof[10:].decode()
+            # Replay identity must not change when the same signature is hex-encoded
+            # with uppercase letters or whitespace accepted by bytes.fromhex.
+            if proof[:10] != b"%010d" % at or len(signature) != 128 or signature != bytes.fromhex(signature).hex():
+                raise ValueError("noncanonical proof")
+            _verify_signature(leaf["holder"], signature, canon([leaf["id"], tool, signed_args, at]))
         except Exception as exc:
             raise spec.Denied("SignatureInvalid: proof") from exc
         if abs(time.time() - at) > PROOF_WINDOW_SECS:
@@ -161,17 +169,32 @@ class Verifier:
         if not gate or tool not in gate["tools"]:
             return []
         wanted = hashlib.sha256(canon([leaf["id"], tool, signed_args, leaf["holder"]])).hexdigest()
+        accepted: set[str] = set()
+        nonces: set[str] = set()
+        # Old reference grants implicitly required one approver.
+        threshold = gate.get("threshold", 1)
+        if type(threshold) is not int or not 1 <= threshold <= len(set(gate["approvers"])):
+            raise spec.Denied("InvalidApproval: invalid threshold")
         for approval in approvals or []:
-            body = json.loads(approval["body"])
-            if body["nonce"] in self.used_approvals:
-                raise spec.Denied("ApprovalReuse")
-            if body["approver"] not in gate["approvers"] or body["request"] != wanted or time.time() >= body["expires"]:
-                continue
             try:
+                body = json.loads(approval["body"])
+                if body["approver"] not in gate["approvers"] or body["request"] != wanted or time.time() >= body["expires"]:
+                    continue
                 _verify_signature(body["approver"], approval["signature"], approval["body"].encode())
-            except Exception:
+                nonce = body["nonce"]
+                if not isinstance(nonce, str) or not nonce:
+                    continue
+            except (KeyError, TypeError, ValueError):
                 continue
-            return [body["nonce"]]
+            except Exception:  # malformed key/signature, or invalid signature
+                continue
+            if nonce in self.used_approvals:
+                raise spec.Denied("ApprovalReuse")
+            # Repeating a signature, or signing twice with one key, is still one approver.
+            accepted.add(body["approver"])
+            nonces.add(nonce)
+        if len(accepted) >= threshold:
+            return list(nonces)
         raise spec.Denied("InvalidApproval" if approvals else "ApprovalGateTriggered")
 
     def install_revocation(self, issuer, grants) -> None:
@@ -190,12 +213,17 @@ class ReferenceAdapter:
         return Key(name, Ed25519PrivateKey.generate(), trust_domain)
 
     def _sign(self, signer, holder, caps, ttl, parent=None, task=None, gate=None, terminal=False) -> Grant:
+        if gate is not None:
+            count = len({p.public_id for p in gate.approvers})
+            if type(gate.threshold) is not int or not 1 <= gate.threshold <= count:
+                raise ValueError("approval threshold must be between one and the number of distinct approvers")
         payload = {
             "id": uuid.uuid4().hex, "issuer": signer.public_id, "holder": holder.public_id,
             "expires": time.time() + ttl, "task": task, "terminal": terminal,
             "parent": parent.digest if parent else None,
             "caps": {tool: {k: _constraint(c) for k, c in args.items()} for tool, args in caps.items()},
-            "gate": {"tools": list(gate.tools), "approvers": [p.public_id for p in gate.approvers]} if gate else None,
+            "gate": {"tools": list(gate.tools), "approvers": [p.public_id for p in gate.approvers],
+                     "threshold": gate.threshold} if gate else None,
         }
         return Grant(payload, signer.key.sign(canon(payload)).hex())
 
@@ -220,7 +248,7 @@ class ReferenceAdapter:
     def approve(self, approver, grant, holder, tool, args, ttl=None):
         body = json.dumps({
             "nonce": uuid.uuid4().hex, "approver": approver.public_id, "identity": f"{approver.name}@example.org",
-            "expires": time.time() + (ttl or 300),
+            "expires": time.time() + (300 if ttl is None else ttl),
             "request": hashlib.sha256(canon([grant.payload["id"], tool, args, holder.public_id])).hexdigest(),
         })
         return {"body": body, "signature": approver.key.sign(body.encode()).hex()}

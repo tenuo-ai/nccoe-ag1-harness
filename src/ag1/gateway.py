@@ -17,6 +17,7 @@ import json
 import posixpath
 import re
 import shlex
+import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
@@ -138,6 +139,7 @@ class EnforcementPoint:
     evidence: list[dict] = field(default_factory=list)
     _signer: Ed25519PrivateKey = field(default_factory=Ed25519PrivateKey.generate)
     _head: str = GENESIS
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.verifier = self.adapter.verifier(self.trusted_root)
@@ -224,6 +226,16 @@ class EnforcementPoint:
         return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
+        # Deliberately serialize this bounded scenario harness: the Service
+        # contract does not require thread safety, and normalization reads state
+        # that execute may change. A slow call blocks this gateway. Narrowing
+        # the lock requires a concurrent service contract and separate evidence
+        # ordering; this harness does not measure throughput or availability.
+        # Keep replay/approval consumption atomic and evidence in call order.
+        with self._lock:
+            return self._handle(req)
+
+    def _handle(self, req: Request) -> Decision:
         checked_at = int(time.time())
         try:
             canonical = self.normalize(req.tool, req.args)

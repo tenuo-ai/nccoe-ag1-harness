@@ -90,17 +90,28 @@ are separate services. The harness then also needs:
 An adapter without them still runs in-process. With them, `AG1_ADAPTER=... pytest tests/test_compose_loopback.py`
 runs every step across separate HTTP services on localhost, without Docker.
 
-## Running
+## Loading
 
-Register the adapter in `src/ag1/adapters/__init__.py`, or pass its path directly:
+`--adapter` (or `AG1_ADAPTER`) accepts any of:
+
+- a name registered in `src/ag1/adapters/__init__.py` (`reference`, `tenuo`);
+- the name of an entry point in the `ag1.adapters` group, so an adapter can ship in its own package:
+
+  ```toml
+  [project.entry-points."ag1.adapters"]
+  myimpl = "mypackage.my_adapter:MyAdapter"
+  ```
+
+- a `module:Class` path.
 
 ```bash
-python -m ag1 --adapter mypackage.my_adapter:MyAdapter --out results-myimpl
-AG1_ADAPTER=mypackage.my_adapter:MyAdapter pytest -q
+python -m ag1 --adapter myimpl --out results-myimpl
+AG1_ADAPTER=myimpl pytest -q
 ```
 
-`tests/test_ag1.py` and `tests/test_compose_loopback.py` use `AG1_ADAPTER`. `tests/test_adversarial.py`
-is specific to Tenuo.
+`tests/test_ag1.py` and `tests/test_compose_loopback.py` use `AG1_ADAPTER` (default `reference`).
+`tests/test_adversarial.py` is specific to the Tenuo adapter and is skipped without it.
 
-`src/ag1/adapters/tenuo_adapter.py` is a complete example in about 300 lines. `tests/reference_adapter.py`
-is a smaller one with no Tenuo code.
+`src/ag1/adapters/reference.py` is a short example with no dependency beyond `cryptography`. It is
+written to be read, not deployed. `src/ag1/adapters/tenuo_adapter.py` is a complete adapter with
+remote operation, in about 300 lines.

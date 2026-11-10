@@ -1,0 +1,5 @@
+# Inputs for requirements-tenuo-lock.txt: requirements.in plus the `tenuo` extra.
+# Keep in step with pyproject.toml.
+-r requirements.in
+tenuo==0.3.5
+cbor2==6.1.5

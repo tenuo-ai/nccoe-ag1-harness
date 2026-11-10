@@ -21,6 +21,7 @@ x-ag1: &ag1
   security_opt: ["no-new-privileges:true"]
   environment: &env
     PYTHONDONTWRITEBYTECODE: "1"
+    AG1_ADAPTER: tenuo  # compose needs an adapter with remote operation; see ADAPTERS.md
     AG1_PEPS: main=http://pep-main:8000,receiving=http://pep-receiving:8000,other-service=http://pep-other:8000
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
