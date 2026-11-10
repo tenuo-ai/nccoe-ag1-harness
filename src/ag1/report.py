@@ -242,7 +242,7 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         "implementation_matches": bundle.get("implementation", {}).get("name") == adapter.name,
     }
     expected_prev = GENESIS
-    signatures = links = chains = denied_unverifiable = 0
+    signatures = links = chains = denied_unverifiable = required_chains = 0
     for item in records:
         try:
             body = item["record"]
@@ -258,6 +258,12 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
         if body.get("prev") == expected_prev:
             links += 1
         expected_prev = hashlib.sha256(payload + signature).hexdigest()
+        # Count obligations, not successful checks. Missing chains on enforced
+        # allows must increase the denominator without increasing `chains`.
+        # Only an explicit false exempts a chainless baseline record.
+        if body.get("decision") == "allowed":
+            if body.get("enforced") is not False or body.get("authorization_chain"):
+                required_chains += 1
         if body.get("authorization_chain"):
             try:
                 verifier.verify_chain(adapter.decode_chain(body["authorization_chain"]), as_of=audit_time(body))
@@ -280,20 +286,17 @@ def _verify_bundle(directory: Path, adapter, trusted_root: str, evidence_key: st
                             and body.get("header") == {k: bundle[k] for k in HEADER_FIELDS if k in bundle})
     except (KeyError, ValueError, TypeError, AttributeError, InvalidSignature):
         pass
-    chained = sum(1 for item in records
-                  if isinstance(item, dict) and isinstance(item.get("record"), dict)
-                  and item["record"].get("decision") == "allowed"
-                  and (item["record"].get("enforced", True) or item["record"].get("authorization_chain")))
     return {
         **anchors,
         "records": count,
         "signatures_valid": signatures,
         "links_valid": links,
         "allowed_chains_valid": chains,
+        "allowed_chains_required": required_chains,
         "denied_chains_unverifiable": denied_unverifiable,
         "terminal_hash_valid": terminal_hash == bundle.get("terminal_hash"),
         "checkpoint_valid": checkpoint_valid,
-        "valid": all(anchors.values()) and signatures == count and links == count and chains == chained
+        "valid": all(anchors.values()) and signatures == count and links == count and chains == required_chains
                  and terminal_hash == bundle.get("terminal_hash") and checkpoint_valid,
     }
 

@@ -21,7 +21,8 @@ def test_entry_point_loads_a_third_party_adapter(monkeypatch):
     assert adapters.available()[-1] == "thirdparty"
 
 
-def test_unknown_name_lists_the_choices():
+def test_unknown_name_lists_the_choices(monkeypatch):
+    monkeypatch.setattr(adapters, "entry_points", lambda group: [])
     with pytest.raises(LookupError, match="reference, tenuo"):
         adapters.load("no-such-adapter")
 
@@ -47,3 +48,33 @@ def test_duplicate_entry_point_names_are_refused(monkeypatch):
     monkeypatch.setattr(adapters, "entry_points", lambda group: eps)
     with pytest.raises(LookupError, match="several packages register adapter 'dup'.*other_pkg"):
         adapters.load("dup")
+
+
+@pytest.mark.parametrize("missing", ["tenuo", "cbor2"])
+def test_loopback_collection_skips_missing_declared_extra(monkeypatch, missing):
+    import runpy
+    from pathlib import Path
+
+    def unavailable(_):
+        raise ModuleNotFoundError("missing optional dependency", name=missing)
+
+    monkeypatch.setenv("AG1_ADAPTER", "tenuo")
+    monkeypatch.setattr(adapters, "load", unavailable)
+    with pytest.raises(pytest.skip.Exception, match="optional tenuo extra not installed"):
+        runpy.run_path(str(Path(__file__).with_name("test_compose_loopback.py")))
+
+
+@pytest.mark.parametrize("error", [ModuleNotFoundError("adapter bug", name="unexpected_dependency"),
+                                   LookupError("unknown adapter"), TypeError("invalid adapter contract")])
+def test_loopback_collection_preserves_configuration_and_adapter_errors(monkeypatch, error):
+    import runpy
+    from pathlib import Path
+
+    def broken(_):
+        raise error
+
+    monkeypatch.setenv("AG1_ADAPTER", "tenuo")
+    monkeypatch.setattr(adapters, "load", broken)
+    with pytest.raises(type(error)) as caught:
+        runpy.run_path(str(Path(__file__).with_name("test_compose_loopback.py")))
+    assert caught.value is error

@@ -166,19 +166,34 @@ def test_quorum_scenario_detects_downgraded_threshold():
     assert not steps.ag1_06(OneVote()).passed
 
 
-@pytest.mark.parametrize('enforce', [True, False])
-def test_signed_allowed_record_requires_chain_when_enforced(tmp_path, enforce):
+@pytest.mark.parametrize("enforce", [True, False, "missing", None, 0])
+@pytest.mark.parametrize("chain_kind", ["absent", "valid", "untrusted"])
+@pytest.mark.parametrize("allowed", [True, False])
+def test_signed_record_chain_requirements(tmp_path, enforce, chain_kind, allowed):
     from ag1 import report
-    from ag1.gateway import Decision
+    from ag1.gateway import Decision, chain_head, record_payload
 
     w = scenario.build_world('reference')
-    w.gateway.enforce = enforce
-    # Simulate a buggy gateway producing a correctly signed but incomplete record.
+    chain = {"absent": [], "valid": w.test_runner.chain,
+             "untrusted": scenario.build_world('reference').test_runner.chain}[chain_kind]
     req = w.test_runner.request('test.run', {'repo': scenario.REPO, 'branch': scenario.FIX_BRANCH, 'suite': 'unit'})
-    w.gateway._record(replace(req, chain=[]), Decision(True, 'authorized', req.args), int(time.time()))
+    w.gateway._record(replace(req, chain=chain), Decision(allowed, 'fixture', req.args), int(time.time()))
+    item = w.gateway.evidence[0]
+    if enforce == "missing":
+        del item["record"]["enforced"]
+    else:
+        item["record"]["enforced"] = enforce
+    # Sign the incomplete/malformed record with the actual evidence key, so
+    # rejection tests chain obligations rather than signature tampering.
+    item["signature"] = w.gateway._signer.sign(record_payload(item["record"])).hex()
+    w.gateway._head = chain_head(w.gateway.evidence)
     report.write([], {}, tmp_path, w.adapter, w.scm, evidence_world=w)
     result = report.verify_bundle(tmp_path, w.adapter, w.issuer.public_id, w.gateway.evidence_public_key_hex)
-    assert result['valid'] is (not enforce)
+    assert result["signatures_valid"] == 1 and result["checkpoint_valid"]
+    required = allowed and (enforce is not False or chain_kind != "absent")
+    assert result["allowed_chains_required"] == int(required)
+    assert result["allowed_chains_valid"] == int(allowed and chain_kind == "valid")
+    assert result["valid"] is (not required or chain_kind == "valid")
 
 
 def test_reference_rejects_unknown_constraint():

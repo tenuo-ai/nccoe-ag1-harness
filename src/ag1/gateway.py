@@ -226,8 +226,12 @@ class EnforcementPoint:
         return posixpath.normpath(self.scm.resolve_symlinks(repo, canonical, ref))
 
     def handle(self, req: Request) -> Decision:
-        # Replay/approval consumption and the service call form one transaction.
-        # Also keeps evidence sequence numbers and hash links ordered.
+        # Deliberately serialize this bounded scenario harness: the Service
+        # contract does not require thread safety, and normalization reads state
+        # that execute may change. A slow call blocks this gateway. Narrowing
+        # the lock requires a concurrent service contract and separate evidence
+        # ordering; this harness does not measure throughput or availability.
+        # Keep replay/approval consumption atomic and evidence in call order.
         with self._lock:
             return self._handle(req)
 

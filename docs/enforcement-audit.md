@@ -79,3 +79,36 @@ absent. The first command uses the default reference adapter for the configurabl
 Forgejo integration tests skip without a configured instance; HTTP loopback tests use stub
 services and do not establish Docker network isolation. CI separately runs real Forgejo and
 Compose jobs. Inspect their results for the exact commit being evaluated before merging.
+
+
+## PR #21 Copilot review dispositions
+
+The eight outstanding comments were reviewed as four topics. Duplicate comments share the same
+resolution; a passing CI run alone is not their disposition.
+
+- **Gateway lock scope** ([first comment](https://github.com/tenuo-ai/nccoe-ag1-harness/pull/21#discussion_r4505667701),
+  duplicates 4505667709 and 4505702713): retain serialization deliberately. The observation about
+  head-of-line blocking is correct: a slow or hung operation blocks that gateway. The service
+  protocol does not require thread safety, normalization reads mutable repository state, and
+  the harness uses ordered execution/evidence rather than testing throughput or availability.
+  Moving execution outside the lock without a concurrent service contract would change those
+  assumptions. The code now explains this tradeoff. Existing concurrent proof and approval
+  regression tests require exactly one execution. Production concurrency is outside this harness.
+- **Optional dependency during loopback collection**
+  ([first comment](https://github.com/tenuo-ai/nccoe-ag1-harness/pull/21#discussion_r4505667723),
+  duplicates 4505702719 and 4505736693): skip this optional suite only for missing dependencies
+  declared by the selected adapter's extra. Unknown adapter names, invalid contracts and unrelated
+  import failures still fail; blanket catches would silently remove coverage. Collection tests
+  cover both missing Tenuo dependencies and the errors that must remain visible.
+- **Evidence chain counting**
+  ([comment](https://github.com/tenuo-ai/nccoe-ag1-harness/pull/21#discussion_r4505736670)):
+  the proposed boolean inversion is unsafe. This count is the number of chains *required*, not
+  the number present. Enforced allows with missing chains must increase the required count while
+  contributing zero verified chains, making verification fail. The count is now explicitly named
+  and reported as `allowed_chains_required`. Only a literal `enforced=false` exempts a chainless
+  baseline record. A 30-case signed-bundle matrix tests valid, absent and untrusted chains, allowed
+  and denied records, and true, false, omitted, null and zero enforcement markers.
+- **Adapter discovery test isolation**
+  ([comment](https://github.com/tenuo-ai/nccoe-ag1-harness/pull/21#discussion_r4505736685)):
+  the old regex already matched the built-in prefix, but the test now mocks entry-point discovery
+  to make its inputs deterministic. The neighboring entry-point test already uses a mock.
