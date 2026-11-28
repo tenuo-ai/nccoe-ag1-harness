@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tenuo = ["tenuo==0.3.8", "cbor2==6.1.5"]
+tenuo = ["tenuo==0.3.9", "cbor2==6.1.5"]
 test = ["pytest==9.1.1"]
 
 [project.scripts]
